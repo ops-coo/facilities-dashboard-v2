@@ -1,612 +1,640 @@
 /**
  * Facilities & Capex Cost Analysis Data
  *
- * This file defines the structure and business logic for analyzing
- * facilities costs as fixed costs that don't scale with enrollment.
+ * 4-CATEGORY STRUCTURE:
+ * 1. LEASE - Rent commitment (fixed, locked-in day 1)
+ * 2. FIXED FACILITIES COST - Security, IT maintenance, landscaping (doesn't scale with students)
+ * 3. VARIABLE FACILITIES COST - Janitorial, utilities, repairs (scales with students)
+ * 4. DEPRECIATED CAPEX - Depreciation/Amortization on renovations/furnishings
  *
- * Key Insight: Real estate and facilities are "locked in" costs that
- * consume a fixed percentage of tuition regardless of enrollment level.
- * Understanding this helps identify which schools are over/under-committed
- * on facilities relative to their capacity utilization.
+ * Key Insight: Real estate represents fixed costs that cannot scale with enrollment.
+ * Once you sign the lease and spend the capex, you commit to these costs regardless of students.
  *
  * Data Sources (Klair MCP):
- * - staging_education.quickbooks_pl_data (actual costs)
- * - staging_education.quickbooks_expense_transactions (detailed expenses)
+ * - staging_education.quickbooks_pl_data (actual costs by company_id)
  * - core_education.google_sheets_school_financial_models_summary (capacity/budget)
- * - staging_education.students (current enrollment)
- * - staging_education.wrike_folders + wrike_folder_properties (facilities status)
  */
 
 // ============================================================================
-// EXPENSE BEHAVIOR RULES
+// 4-CATEGORY COST STRUCTURE
 // ============================================================================
 
-export type CostBehavior = 'fixed' | 'semi-variable' | 'variable';
-
-export interface ExpenseRule {
-  id: string;
-  name: string;
-  accountName: string; // QuickBooks account name pattern
-  costType: CostBehavior;
-  fixedPercent: number; // 0-1, portion that doesn't scale with students
-  variablePercent: number; // 0-1, portion that scales with students
-  studentScalingRule: string;
-  capacityRule: string;
-  notes?: string;
-}
-
-/**
- * Expense rules derived from the Facilities & Capex analysis
- * These define how each cost category behaves as enrollment changes
- */
-export const expenseRules: ExpenseRule[] = [
-  {
-    id: 'rent',
-    name: 'Rent',
-    accountName: '62200 Rent',
-    costType: 'fixed',
-    fixedPercent: 1.0,
-    variablePercent: 0,
-    studentScalingRule: 'No change with students',
-    capacityRule: 'Flat until new space or lease change',
-    notes: 'Lease commitments are fixed - this is the core "locked in" cost'
-  },
-  {
-    id: 'utilities',
-    name: 'Utilities',
-    accountName: '62400 Utilities',
-    costType: 'semi-variable',
-    fixedPercent: 0.6,
-    variablePercent: 0.4,
-    studentScalingRule: 'Base + partial $/student',
-    capacityRule: 'Variable portion linear with enrollment',
-    notes: 'Base heating/cooling fixed; marginal usage scales with occupancy'
-  },
-  {
-    id: 'maintenance',
-    name: 'Repairs and Maintenance',
-    accountName: '62300 Repairs and Maintenance',
-    costType: 'semi-variable',
-    fixedPercent: 0.7,
-    variablePercent: 0.3,
-    studentScalingRule: 'Base + partial $/student',
-    capacityRule: 'Variable portion linear with enrollment',
-    notes: 'Building maintenance mostly fixed; wear increases with usage'
-  },
-  {
-    id: 'it_maintenance',
-    name: 'IT Maintenance / Internet',
-    accountName: '62301 IT Maintenance',
-    costType: 'semi-variable',
-    fixedPercent: 0.8,
-    variablePercent: 0.2,
-    studentScalingRule: 'Small $/student component',
-    capacityRule: 'Variable portion linear with enrollment',
-    notes: 'Core infrastructure fixed; device/license costs scale slightly'
-  },
-  {
-    id: 'landscaping',
-    name: 'Landscaping',
-    accountName: 'Landscaping',
-    costType: 'fixed',
-    fixedPercent: 1.0,
-    variablePercent: 0,
-    studentScalingRule: 'No change with students',
-    capacityRule: 'Flat; space-driven',
-    notes: 'Grounds maintenance unrelated to student count'
-  },
-  {
-    id: 'janitorial',
-    name: 'Janitorial/Toiletries',
-    accountName: 'Janitorial',
-    costType: 'semi-variable',
-    fixedPercent: 0.8,
-    variablePercent: 0.2,
-    studentScalingRule: 'Direct $/student',
-    capacityRule: 'Variable portion linear with enrollment',
-    notes: 'Base cleaning fixed; supplies scale with occupancy'
-  },
-  {
-    id: 'repairs',
-    name: 'Repairs/Renovations',
-    accountName: 'Repairs',
-    costType: 'semi-variable',
-    fixedPercent: 0.8,
-    variablePercent: 0.2,
-    studentScalingRule: 'Triggered by usage',
-    capacityRule: 'Variable portion linear with enrollment',
-    notes: 'Mostly discretionary; some wear-driven'
-  },
-  {
-    id: 'security',
-    name: 'Security Services',
-    accountName: '62304 Security Services',
-    costType: 'semi-variable',
-    fixedPercent: 0.8,
-    variablePercent: 0.2,
-    studentScalingRule: 'Base + step per student bands',
-    capacityRule: 'Staffing steps with tiering',
-    notes: 'Base security required; may add staff at capacity thresholds'
-  },
-  {
-    id: 'transportation',
-    name: 'Transportation',
-    accountName: '62500 Transportation',
-    costType: 'variable',
-    fixedPercent: 0,
-    variablePercent: 1.0,
-    studentScalingRule: 'Direct $/student',
-    capacityRule: 'Linear with enrollment',
-    notes: 'Fully variable - scales directly with student count'
-  },
-  {
-    id: 'food',
-    name: 'Food Services',
-    accountName: 'Food',
-    costType: 'variable',
-    fixedPercent: 0,
-    variablePercent: 1.0,
-    studentScalingRule: 'Direct $/student',
-    capacityRule: 'Linear with enrollment',
-    notes: 'Fully variable - scales directly with student count'
-  },
-  {
-    id: 'facilities_labor',
-    name: 'Contracted Labor - Facilities',
-    accountName: '60201 Contracted Labor - Facilities',
-    costType: 'semi-variable',
-    fixedPercent: 0.7,
-    variablePercent: 0.3,
-    studentScalingRule: 'Base + partial scaling',
-    capacityRule: 'Step function with capacity tiers',
-    notes: 'Core staff fixed; may add at capacity thresholds'
-  }
-];
-
-// ============================================================================
-// SCHOOL DATA TYPES
-// ============================================================================
-
-export interface SchoolFacilitiesCosts {
+export interface LeaseCategory {
   rent: number;
-  utilities: number;
-  maintenance: number;
-  itMaintenance: number;
-  landscaping: number;
-  janitorial: number;
-  security: number;
-  transportation: number;
-  food: number;
-  facilitiesLabor: number;
-  other: number;
-}
-
-export interface SchoolCapexCosts {
-  shellAndCore: number;
-  fitOut: number;
   total: number;
 }
 
-export interface SchoolMetrics {
-  // Per-student metrics at CURRENT enrollment
-  facilitiesCostPerStudentCurrent: number;
-  capexPerStudentCurrent: number;
-  totalCostPerStudentCurrent: number;
-  facilitiesPctOfTuitionCurrent: number;
-
-  // Per-student metrics at CAPACITY
-  facilitiesCostPerStudentCapacity: number;
-  capexPerStudentCapacity: number;
-  totalCostPerStudentCapacity: number;
-  facilitiesPctOfTuitionCapacity: number;
-
-  // Fixed cost analysis
-  fixedCostsTotal: number;
-  fixedCostsPerStudentCurrent: number;
-  fixedCostsPerStudentCapacity: number;
-  fixedCostsPctOfTuitionCurrent: number;
-  fixedCostsPctOfTuitionCapacity: number;
-
-  // Per square foot (if available)
-  costPerSqFt?: number;
-  rentPerSqFt?: number;
+export interface FixedFacilitiesCategory {
+  security: number;
+  itMaintenance: number;
+  landscaping: number;
+  total: number;
 }
 
-export interface School {
+export interface VariableFacilitiesCategory {
+  janitorial: number;
+  utilities: number;
+  repairs: number;
+  total: number;
+}
+
+export interface DepreciatedCapexCategory {
+  depreciation: number;
+  total: number;
+}
+
+export interface FourCategoryCosts {
+  lease: LeaseCategory;
+  fixedFacilities: FixedFacilitiesCategory;
+  variableFacilities: VariableFacilitiesCategory;
+  depreciatedCapex: DepreciatedCapexCategory;
+  grandTotal: number;
+  totalExcludingLease: number; // Key metric: what's spent AFTER signing lease
+}
+
+// ============================================================================
+// SCHOOL DATA FROM KLAIR
+// ============================================================================
+
+export interface SchoolData {
   id: string;
   name: string;
   displayName: string;
-  klairName: string; // Name as it appears in Klair/QuickBooks
+  companyId: string; // Klair company_id
 
-  // Location
-  city: string;
-  state: string;
+  // Classification
+  schoolType: SchoolType;
+  tuitionTier: TuitionTier;
 
-  // School characteristics
-  schoolType: 'microschool' | 'full-alpha' | 'high-school' | 'sports' | 'gt' | 'montessorium' | 'nova' | 'other';
-  tuition: number;
-
-  // Capacity and enrollment
+  // Enrollment & Capacity
   currentEnrollment: number;
   capacity: number;
-  utilizationRate: number; // currentEnrollment / capacity
+  utilizationRate: number;
+  tuition: number;
 
-  // Physical space (if available)
-  sqft?: number;
+  // Square Footage
+  sqft: number;
+  sqftPerStudent: number; // at current enrollment
 
-  // Operating status
-  operatingMonths: number; // Months operating in current period
-  isFitOut: boolean; // Currently in fit-out phase
-  isOpen: boolean;
+  // 4-Category Costs
+  costs: FourCategoryCosts;
 
-  // Costs
-  facilitiesCosts: SchoolFacilitiesCosts;
-  facilitiesCostsTotal: number;
-  capex: SchoolCapexCosts;
+  // Calculated Metrics
+  metrics: {
+    costPerStudentCurrent: number;
+    costPerStudentCapacity: number;
+    pctOfTuitionCurrent: number;
+    pctOfTuitionCapacity: number;
+    totalExclLeasePerStudent: number;
+    // Per sq ft metrics
+    costPerSqft: number;
+    leasePerSqft: number;
+  };
 
-  // Calculated metrics
-  metrics: SchoolMetrics;
-}
-
-// ============================================================================
-// HELPER FUNCTIONS
-// ============================================================================
-
-/**
- * Calculate the cost at a given enrollment level based on expense rule
- */
-export function calculateCostAtEnrollment(
-  costAtCapacity: number,
-  currentEnrollment: number,
-  capacity: number,
-  rule: ExpenseRule
-): number {
-  if (capacity === 0) return costAtCapacity;
-
-  const utilizationRate = currentEnrollment / capacity;
-  const fixedPortion = costAtCapacity * rule.fixedPercent;
-  const variablePortion = costAtCapacity * rule.variablePercent * utilizationRate;
-
-  return fixedPortion + variablePortion;
-}
-
-/**
- * Calculate total fixed costs for a school
- */
-export function calculateFixedCosts(facilitiesCosts: SchoolFacilitiesCosts): number {
-  let fixedTotal = 0;
-
-  // Rent is 100% fixed
-  fixedTotal += facilitiesCosts.rent * 1.0;
-
-  // Utilities: 60% fixed
-  fixedTotal += facilitiesCosts.utilities * 0.6;
-
-  // Maintenance: 70% fixed
-  fixedTotal += facilitiesCosts.maintenance * 0.7;
-
-  // IT: 80% fixed
-  fixedTotal += facilitiesCosts.itMaintenance * 0.8;
-
-  // Landscaping: 100% fixed
-  fixedTotal += facilitiesCosts.landscaping * 1.0;
-
-  // Janitorial: 80% fixed
-  fixedTotal += facilitiesCosts.janitorial * 0.8;
-
-  // Security: 80% fixed
-  fixedTotal += facilitiesCosts.security * 0.8;
-
-  // Transportation: 0% fixed (100% variable)
-  // Food: 0% fixed (100% variable)
-
-  // Facilities labor: 70% fixed
-  fixedTotal += facilitiesCosts.facilitiesLabor * 0.7;
-
-  // Other: assume 100% fixed
-  fixedTotal += facilitiesCosts.other * 1.0;
-
-  return fixedTotal;
-}
-
-/**
- * Calculate school metrics based on costs, enrollment, and capacity
- */
-export function calculateSchoolMetrics(
-  facilitiesCostsTotal: number,
-  capexTotal: number,
-  fixedCostsTotal: number,
-  currentEnrollment: number,
-  capacity: number,
-  tuition: number,
-  sqft?: number
-): SchoolMetrics {
-  // Avoid division by zero
-  const safeCurrentEnrollment = Math.max(currentEnrollment, 1);
-  const safeCapacity = Math.max(capacity, 1);
-
-  const tuitionRevenueCurrent = safeCurrentEnrollment * tuition;
-  const tuitionRevenueCapacity = safeCapacity * tuition;
-
-  return {
-    // Current enrollment metrics
-    facilitiesCostPerStudentCurrent: facilitiesCostsTotal / safeCurrentEnrollment,
-    capexPerStudentCurrent: capexTotal / safeCurrentEnrollment,
-    totalCostPerStudentCurrent: (facilitiesCostsTotal + capexTotal) / safeCurrentEnrollment,
-    facilitiesPctOfTuitionCurrent: (facilitiesCostsTotal / tuitionRevenueCurrent) * 100,
-
-    // At capacity metrics
-    facilitiesCostPerStudentCapacity: facilitiesCostsTotal / safeCapacity,
-    capexPerStudentCapacity: capexTotal / safeCapacity,
-    totalCostPerStudentCapacity: (facilitiesCostsTotal + capexTotal) / safeCapacity,
-    facilitiesPctOfTuitionCapacity: (facilitiesCostsTotal / tuitionRevenueCapacity) * 100,
-
-    // Fixed cost analysis
-    fixedCostsTotal,
-    fixedCostsPerStudentCurrent: fixedCostsTotal / safeCurrentEnrollment,
-    fixedCostsPerStudentCapacity: fixedCostsTotal / safeCapacity,
-    fixedCostsPctOfTuitionCurrent: (fixedCostsTotal / tuitionRevenueCurrent) * 100,
-    fixedCostsPctOfTuitionCapacity: (fixedCostsTotal / tuitionRevenueCapacity) * 100,
-
-    // Per square foot (if available)
-    costPerSqFt: sqft ? facilitiesCostsTotal / sqft : undefined,
-    rentPerSqFt: undefined // Would need rent + sqft
+  // Break-even Analysis
+  breakeven: {
+    studentsFor15Pct: number;  // Students needed to reach 15% of tuition
+    studentsFor20Pct: number;  // Students needed to reach 20% of tuition
+    pctAt75Capacity: number;   // Facilities % at 75% capacity
+    pctAt100Capacity: number;  // Facilities % at 100% capacity
   };
 }
 
 // ============================================================================
-// KLAIR DATA - ACTUAL FACILITIES COSTS FROM QUICKBOOKS
+// KLAIR DATA - Facilities Costs by Company (from quickbooks_pl_data)
 // ============================================================================
 
-/**
- * Actual facilities costs by school from Klair
- * Source: staging_education.quickbooks_pl_data
- * Query: Filtered by facilities-related account names
- */
-export const klairFacilitiesCosts: Record<string, SchoolFacilitiesCosts> = {
-  'austin-k8': {
-    rent: 832449.41,
-    utilities: 30731.67,
-    maintenance: 75649.79,
-    itMaintenance: 41999.39,
-    landscaping: 0,
-    janitorial: 0,
-    security: 81085.01,
-    transportation: 1567.07,
-    food: 0,
-    facilitiesLabor: 0,
-    other: 0
+interface RawKlairCosts {
+  lease_rent: number;
+  fixed_security: number;
+  fixed_it: number;
+  fixed_landscaping: number;
+  variable_janitorial: number;
+  variable_utilities: number;
+  variable_repairs: number;
+  depreciated_capex: number;
+}
+
+const klairRawData: Record<string, RawKlairCosts> = {
+  // Miami (Alpha School Miami complex)
+  'miami': {
+    lease_rent: 1275065,
+    fixed_security: 105131,
+    fixed_it: 48181,
+    fixed_landscaping: 52063,
+    variable_janitorial: 36751,
+    variable_utilities: 29491,
+    variable_repairs: 141767,
+    depreciated_capex: 286027
   },
-  'alpha-high-school': {
-    rent: 247785.24,
-    utilities: 39715.57,
-    maintenance: 132922.14,
-    itMaintenance: 64446.02,
-    landscaping: 0,
-    janitorial: 0,
-    security: 64095.91,
-    transportation: 0,
-    food: 0,
-    facilitiesLabor: 0,
-    other: 0
+  // Alpha (Austin K-8 + Alpha High School)
+  'alpha': {
+    lease_rent: 1240846,
+    fixed_security: 171802,
+    fixed_it: 166607,
+    fixed_landscaping: 29312,
+    variable_janitorial: 120713,
+    variable_utilities: 122620,
+    variable_repairs: 378884,
+    depreciated_capex: 127081
   },
-  'brownsville-k8': {
-    rent: 54931.25,
-    utilities: 12427.42,
-    maintenance: 24089.12,
-    itMaintenance: 10853.18,
-    landscaping: 0,
-    janitorial: 0,
-    security: 15005.25,
-    transportation: 7572.48,
-    food: 0,
-    facilitiesLabor: 0,
-    other: 0
+  // Sports Academy Plano (75010)
+  'sports_academy_75010_llc': {
+    lease_rent: 699999,
+    fixed_security: 38348,
+    fixed_it: 15408,
+    fixed_landscaping: 47177,
+    variable_janitorial: 9164,
+    variable_utilities: 104098,
+    variable_repairs: 62045,
+    depreciated_capex: 40509
   },
-  'waypoint-academy': {
-    rent: 51030.00,
-    utilities: 660.00,
-    maintenance: 5921.22,
-    itMaintenance: 12534.82,
-    landscaping: 0,
-    janitorial: 0,
-    security: 0,
-    transportation: 0,
-    food: 0,
-    facilitiesLabor: 0,
-    other: 0
+  // Alpha Schools LLC (Microschools portfolio)
+  'alpha_schools_llc': {
+    lease_rent: 369061,
+    fixed_security: 37531,
+    fixed_it: 35182,
+    fixed_landscaping: 2525,
+    variable_janitorial: 2600,
+    variable_utilities: 43137,
+    variable_repairs: 38567,
+    depreciated_capex: 0
   },
-  'alpha-miami': {
-    rent: 20000.00,
-    utilities: 4641.12,
-    maintenance: 22563.58,
-    itMaintenance: 12256.11,
-    landscaping: 0,
-    janitorial: 0,
-    security: 9370.00,
-    transportation: 411.94,
-    food: 0,
-    facilitiesLabor: 0,
-    other: 0
+  // Sports Academy Austin (78734)
+  'sports_academy_78734_llc': {
+    lease_rent: 332934,
+    fixed_security: 69277,
+    fixed_it: 36822,
+    fixed_landscaping: 14346,
+    variable_janitorial: 24464,
+    variable_utilities: 18539,
+    variable_repairs: 47551,
+    depreciated_capex: 161497
   },
-  'nova-austin': {
-    rent: 24698.29,
-    utilities: 667.43,
-    maintenance: 18639.50,
-    itMaintenance: 7219.30,
-    landscaping: 0,
-    janitorial: 0,
-    security: 0,
-    transportation: 17.91,
-    food: 0,
-    facilitiesLabor: 0,
-    other: 0
+  // GT School (78626)
+  'gtschool_78626_llc': {
+    lease_rent: 248934,
+    fixed_security: 0,
+    fixed_it: 17459,
+    fixed_landscaping: 11961,
+    variable_janitorial: 31931,
+    variable_utilities: 14490,
+    variable_repairs: 25091,
+    depreciated_capex: 43785
   },
-  'gt-school': {
-    rent: 0,
-    utilities: 13955.86,
-    maintenance: 6373.63,
-    itMaintenance: 0,
-    landscaping: 0,
-    janitorial: 0,
-    security: 0,
-    transportation: 38.00,
-    food: 0,
-    facilitiesLabor: 0,
-    other: 0
+  // eSports Academy
+  'esports_academy_llc': {
+    lease_rent: 102510,
+    fixed_security: 0,
+    fixed_it: 30705,
+    fixed_landscaping: 7004,
+    variable_janitorial: 17057,
+    variable_utilities: 15211,
+    variable_repairs: 10813,
+    depreciated_capex: 27312
   },
-  'alpha-santa-barbara': {
-    rent: 0,
-    utilities: 3654.35,
-    maintenance: 929.02,
-    itMaintenance: 2027.74,
-    landscaping: 0,
-    janitorial: 0,
-    security: 0,
-    transportation: 0,
-    food: 0,
-    facilitiesLabor: 0,
-    other: 0
+  // Alpha School Santa Barbara (93101)
+  'alpha_school_93101_llc': {
+    lease_rent: 65410,
+    fixed_security: 36959,
+    fixed_it: 37491,
+    fixed_landscaping: 0,
+    variable_janitorial: 10250,
+    variable_utilities: 0,
+    variable_repairs: 13892,
+    depreciated_capex: 80226
   },
-  'alpha-scottsdale': {
-    rent: 0,
-    utilities: 870.00,
-    maintenance: 4639.45,
-    itMaintenance: 539.99,
-    landscaping: 0,
-    janitorial: 0,
-    security: 125.00,
-    transportation: 0,
-    food: 0,
-    facilitiesLabor: 0,
-    other: 0
+  // Valenta Academy
+  'valenta_academy': {
+    lease_rent: 10610,
+    fixed_security: 0,
+    fixed_it: 1772,
+    fixed_landscaping: 0,
+    variable_janitorial: 3807,
+    variable_utilities: 0,
+    variable_repairs: 357,
+    depreciated_capex: 19559
   },
-  'alpha-san-francisco': {
-    rent: 0,
-    utilities: 875.83,
-    maintenance: 3679.21,
-    itMaintenance: 0,
-    landscaping: 0,
-    janitorial: 0,
-    security: 125.00,
-    transportation: 0,
-    food: 0,
-    facilitiesLabor: 0,
-    other: 0
+  // Alpha School Fort Worth (76087)
+  'alpha_school_76087_llc': {
+    lease_rent: 6000,
+    fixed_security: 0,
+    fixed_it: 11013,
+    fixed_landscaping: 0,
+    variable_janitorial: 0,
+    variable_utilities: 0,
+    variable_repairs: 0,
+    depreciated_capex: 15454
   },
-  'alpha-fort-worth': {
-    rent: 0,
-    utilities: 0,
-    maintenance: 164.94,
-    itMaintenance: 0,
-    landscaping: 0,
-    janitorial: 0,
-    security: 0,
-    transportation: 3096.49,
-    food: 0,
-    facilitiesLabor: 0,
-    other: 0
-  },
-  'alpha-lake-forest': {
-    rent: 0,
-    utilities: 0,
-    maintenance: 144.46,
-    itMaintenance: 1679.05,
-    landscaping: 0,
-    janitorial: 0,
-    security: 0,
-    transportation: 0,
-    food: 0,
-    facilitiesLabor: 0,
-    other: 0
-  },
-  'nova-bastrop': {
-    rent: 9957.78,
-    utilities: 0,
-    maintenance: 5423.58,
-    itMaintenance: 3265.22,
-    landscaping: 0,
-    janitorial: 0,
-    security: 0,
-    transportation: 0,
-    food: 0,
-    facilitiesLabor: 0,
-    other: 0
-  },
-  'montessorium': {
-    rent: 0,
-    utilities: 0,
-    maintenance: 2806.88,
-    itMaintenance: 1941.59,
-    landscaping: 0,
-    janitorial: 0,
-    security: 1375.00,
-    transportation: 0,
-    food: 0,
-    facilitiesLabor: 0,
-    other: 0
+  // Alpha School Charlotte (28269)
+  'alpha_school_28269_llc': {
+    lease_rent: 0,
+    fixed_security: 0,
+    fixed_it: 14474,
+    fixed_landscaping: 0,
+    variable_janitorial: 0,
+    variable_utilities: 3030,
+    variable_repairs: 17489,
+    depreciated_capex: 35559
   }
 };
 
 // ============================================================================
-// ENROLLMENT DATA FROM KLAIR
+// SCHOOL TYPE & TUITION TIER CLASSIFICATIONS
 // ============================================================================
 
-/**
- * Current enrollment by school from Klair
- * Source: staging_education.students WHERE admission_status = 'Enrolled'
- */
-export const klairEnrollment: Record<string, number> = {
-  'austin-k8': 161, // "Alpha School Austin" in Klair
-  'alpha-high-school': 50,
-  'brownsville-k8': 42, // "Alpha School Brownsville"
-  'alpha-miami': 67, // "Alpha School Miami"
-  'alpha-scottsdale': 31,
-  'alpha-san-francisco': 19,
-  'alpha-santa-barbara': 12,
-  'alpha-fort-worth': 10,
-  'alpha-lake-forest': 12,
-  'alpha-palm-beach': 7,
-  'alpha-plano': 7,
-  'alpha-chantilly': 4,
-  'alpha-tampa': 1,
-  'waypoint-academy': 1,
-  'gt-school': 24,
-  'nova-austin': 15,
-  'nova-bastrop': 15,
-  'montessorium': 18,
-  'texas-sports-academy': 35
+export type SchoolType = 'alpha-school' | 'microschool' | 'gt-school' | 'low-dollar' | 'growth';
+export type TuitionTier = 'premium' | 'standard' | 'value' | 'economy';
+
+export const schoolTypeLabels: Record<SchoolType, string> = {
+  'alpha-school': 'Alpha School',
+  'microschool': 'MicroSchool',
+  'gt-school': 'GT / eSports',
+  'low-dollar': 'Low Dollar School',
+  'growth': 'Growth'
+};
+
+export const tuitionTierLabels: Record<TuitionTier, string> = {
+  'premium': '$50K+',
+  'standard': '$35K-$40K',
+  'value': '$20K-$25K',
+  'economy': '<$20K'
+};
+
+export const tuitionTierRanges: Record<TuitionTier, { min: number; max: number }> = {
+  'premium': { min: 45000, max: 999999 },
+  'standard': { min: 35000, max: 44999 },
+  'value': { min: 20000, max: 34999 },
+  'economy': { min: 0, max: 19999 }
 };
 
 // ============================================================================
-// CAPACITY DATA (from financial models)
+// SCHOOL METADATA (enrollment, capacity, tuition, type)
 // ============================================================================
 
-/**
- * School capacity targets
- * Source: core_education.google_sheets_school_financial_models_summary
- */
-export const schoolCapacity: Record<string, { capacity: number; tuition: number }> = {
-  'austin-k8': { capacity: 225, tuition: 40000 },
-  'alpha-high-school': { capacity: 150, tuition: 40000 },
-  'brownsville-k8': { capacity: 100, tuition: 15000 },
-  'alpha-miami': { capacity: 25, tuition: 40000 },
-  'alpha-scottsdale': { capacity: 25, tuition: 40000 },
-  'alpha-san-francisco': { capacity: 25, tuition: 65000 },
-  'alpha-santa-barbara': { capacity: 25, tuition: 50000 },
-  'alpha-fort-worth': { capacity: 25, tuition: 40000 },
-  'alpha-lake-forest': { capacity: 25, tuition: 50000 },
-  'alpha-palm-beach': { capacity: 25, tuition: 40000 },
-  'alpha-plano': { capacity: 25, tuition: 40000 },
-  'alpha-chantilly': { capacity: 25, tuition: 40000 },
-  'alpha-tampa': { capacity: 25, tuition: 40000 },
-  'waypoint-academy': { capacity: 25, tuition: 40000 },
-  'gt-school': { capacity: 50, tuition: 25000 },
-  'nova-austin': { capacity: 50, tuition: 15000 },
-  'nova-bastrop': { capacity: 50, tuition: 15000 },
-  'montessorium': { capacity: 40, tuition: 25000 },
-  'texas-sports-academy': { capacity: 100, tuition: 25000 }
+interface SchoolMetadata {
+  displayName: string;
+  currentEnrollment: number;
+  capacity: number;
+  tuition: number;
+  schoolType: SchoolType;
+  tuitionTier: TuitionTier;
+  sqft: number; // Gross square footage
+}
+
+const schoolMetadata: Record<string, SchoolMetadata> = {
+  'miami': {
+    displayName: 'Alpha Miami Campus',
+    currentEnrollment: 67,
+    capacity: 184, // from Excel
+    tuition: 50000, // from Excel
+    schoolType: 'alpha-school',
+    tuitionTier: 'premium',
+    sqft: 29808
+  },
+  'alpha': {
+    displayName: 'Alpha Austin (K-8 + HS)',
+    currentEnrollment: 211,
+    capacity: 418, // 212 + 206 combined
+    tuition: 40000,
+    schoolType: 'alpha-school',
+    tuitionTier: 'standard',
+    sqft: 38780 // 19301 + 19479 combined
+  },
+  'sports_academy_75010_llc': {
+    displayName: 'Texas Sports Academy - Plano',
+    currentEnrollment: 85,
+    capacity: 150,
+    tuition: 25000,
+    schoolType: 'gt-school',
+    tuitionTier: 'value',
+    sqft: 15000 // estimated based on similar facilities
+  },
+  'alpha_schools_llc': {
+    displayName: 'Alpha Microschools Portfolio',
+    currentEnrollment: 103,
+    capacity: 200,
+    tuition: 40000,
+    schoolType: 'microschool',
+    tuitionTier: 'standard',
+    sqft: 25000 // estimated aggregate for portfolio
+  },
+  'sports_academy_78734_llc': {
+    displayName: 'Texas Sports Academy - Austin',
+    currentEnrollment: 72,
+    capacity: 120,
+    tuition: 25000,
+    schoolType: 'gt-school',
+    tuitionTier: 'value',
+    sqft: 12000 // estimated
+  },
+  'gtschool_78626_llc': {
+    displayName: 'GT School',
+    currentEnrollment: 45,
+    capacity: 115, // from Excel
+    tuition: 25000,
+    schoolType: 'gt-school',
+    tuitionTier: 'value',
+    sqft: 11517
+  },
+  'esports_academy_llc': {
+    displayName: 'eSports Academy',
+    currentEnrollment: 28,
+    capacity: 80, // from Excel
+    tuition: 25000, // corrected from Excel
+    schoolType: 'gt-school',
+    tuitionTier: 'value',
+    sqft: 5569
+  },
+  'alpha_school_93101_llc': {
+    displayName: 'Alpha Santa Barbara',
+    currentEnrollment: 12,
+    capacity: 78, // from Excel
+    tuition: 50000,
+    schoolType: 'microschool',
+    tuitionTier: 'premium',
+    sqft: 9691
+  },
+  'valenta_academy': {
+    displayName: 'Valenta Academy',
+    currentEnrollment: 8,
+    capacity: 18, // from Excel
+    tuition: 15000, // corrected from Excel - Low Dollar School
+    schoolType: 'low-dollar',
+    tuitionTier: 'economy',
+    sqft: 1057
+  },
+  'alpha_school_76087_llc': {
+    displayName: 'Alpha Fort Worth',
+    currentEnrollment: 10,
+    capacity: 18, // from Excel
+    tuition: 40000,
+    schoolType: 'microschool',
+    tuitionTier: 'standard',
+    sqft: 1320
+  },
+  'alpha_school_28269_llc': {
+    displayName: 'Alpha Charlotte',
+    currentEnrollment: 15,
+    capacity: 25,
+    tuition: 40000,
+    schoolType: 'microschool',
+    tuitionTier: 'standard',
+    sqft: 3000 // estimated for new microschool
+  }
 };
+
+// ============================================================================
+// TRANSFORM RAW DATA TO 4-CATEGORY STRUCTURE
+// ============================================================================
+
+function transformToFourCategories(raw: RawKlairCosts): FourCategoryCosts {
+  const lease: LeaseCategory = {
+    rent: raw.lease_rent,
+    total: raw.lease_rent
+  };
+
+  const fixedFacilities: FixedFacilitiesCategory = {
+    security: raw.fixed_security,
+    itMaintenance: raw.fixed_it,
+    landscaping: raw.fixed_landscaping,
+    total: raw.fixed_security + raw.fixed_it + raw.fixed_landscaping
+  };
+
+  const variableFacilities: VariableFacilitiesCategory = {
+    janitorial: raw.variable_janitorial,
+    utilities: raw.variable_utilities,
+    repairs: raw.variable_repairs,
+    total: raw.variable_janitorial + raw.variable_utilities + raw.variable_repairs
+  };
+
+  const depreciatedCapex: DepreciatedCapexCategory = {
+    depreciation: raw.depreciated_capex,
+    total: raw.depreciated_capex
+  };
+
+  const grandTotal = lease.total + fixedFacilities.total + variableFacilities.total + depreciatedCapex.total;
+  const totalExcludingLease = fixedFacilities.total + variableFacilities.total + depreciatedCapex.total;
+
+  return {
+    lease,
+    fixedFacilities,
+    variableFacilities,
+    depreciatedCapex,
+    grandTotal,
+    totalExcludingLease
+  };
+}
+
+// ============================================================================
+// BUILD SCHOOL DATA
+// ============================================================================
+
+export function buildSchoolData(): SchoolData[] {
+  const schools: SchoolData[] = [];
+
+  for (const [companyId, rawCosts] of Object.entries(klairRawData)) {
+    const metadata = schoolMetadata[companyId];
+    if (!metadata) continue;
+
+    const costs = transformToFourCategories(rawCosts);
+    const utilizationRate = metadata.currentEnrollment / metadata.capacity;
+
+    const tuitionRevenueCurrent = metadata.currentEnrollment * metadata.tuition;
+    const tuitionRevenueCapacity = metadata.capacity * metadata.tuition;
+
+    // Break-even calculations
+    // Students needed for facilities to be X% of tuition revenue
+    // facilities_cost / (students * tuition) = target_pct
+    // students = facilities_cost / (target_pct * tuition)
+    const studentsFor15Pct = Math.ceil(costs.grandTotal / (0.15 * metadata.tuition));
+    const studentsFor20Pct = Math.ceil(costs.grandTotal / (0.20 * metadata.tuition));
+
+    // % of tuition at different capacity levels
+    const capacity75 = Math.floor(metadata.capacity * 0.75);
+    const revenue75 = capacity75 * metadata.tuition;
+    const pctAt75Capacity = (costs.grandTotal / revenue75) * 100;
+    const pctAt100Capacity = (costs.grandTotal / tuitionRevenueCapacity) * 100;
+
+    // Square footage metrics
+    const sqftPerStudent = metadata.sqft / Math.max(metadata.currentEnrollment, 1);
+    const costPerSqft = metadata.sqft > 0 ? costs.grandTotal / metadata.sqft : 0;
+    const leasePerSqft = metadata.sqft > 0 ? costs.lease.total / metadata.sqft : 0;
+
+    schools.push({
+      id: companyId,
+      name: companyId,
+      displayName: metadata.displayName,
+      companyId,
+      schoolType: metadata.schoolType,
+      tuitionTier: metadata.tuitionTier,
+      currentEnrollment: metadata.currentEnrollment,
+      capacity: metadata.capacity,
+      utilizationRate,
+      tuition: metadata.tuition,
+      sqft: metadata.sqft,
+      sqftPerStudent,
+      costs,
+      metrics: {
+        costPerStudentCurrent: costs.grandTotal / Math.max(metadata.currentEnrollment, 1),
+        costPerStudentCapacity: costs.grandTotal / Math.max(metadata.capacity, 1),
+        pctOfTuitionCurrent: (costs.grandTotal / tuitionRevenueCurrent) * 100,
+        pctOfTuitionCapacity: (costs.grandTotal / tuitionRevenueCapacity) * 100,
+        totalExclLeasePerStudent: costs.totalExcludingLease / Math.max(metadata.currentEnrollment, 1),
+        costPerSqft,
+        leasePerSqft
+      },
+      breakeven: {
+        studentsFor15Pct,
+        studentsFor20Pct,
+        pctAt75Capacity,
+        pctAt100Capacity
+      }
+    });
+  }
+
+  return schools.sort((a, b) => b.costs.grandTotal - a.costs.grandTotal);
+}
+
+// ============================================================================
+// SCENARIO MODELING
+// ============================================================================
+
+export interface ScenarioResult {
+  utilizationPct: number;
+  totalEnrollment: number;
+  avgCostPerStudent: number;
+  avgPctOfTuition: number;
+  fixedCostPerStudent: number;
+  savingsVsCurrent: number;
+}
+
+export function calculateScenario(schools: SchoolData[], targetUtilizationPct: number): ScenarioResult {
+  const targetUtilization = targetUtilizationPct / 100;
+
+  let totalEnrollment = 0;
+  let totalCosts = 0;
+  let totalTuitionRevenue = 0;
+  let totalFixedCosts = 0;
+  let currentTotalCostPerStudent = 0;
+  let currentTotalEnrollment = 0;
+
+  for (const school of schools) {
+    const scenarioEnrollment = Math.floor(school.capacity * targetUtilization);
+    const scenarioRevenue = scenarioEnrollment * school.tuition;
+
+    totalEnrollment += scenarioEnrollment;
+    totalCosts += school.costs.grandTotal;
+    totalTuitionRevenue += scenarioRevenue;
+    totalFixedCosts += school.costs.lease.total + school.costs.fixedFacilities.total + school.costs.depreciatedCapex.total;
+
+    currentTotalEnrollment += school.currentEnrollment;
+    currentTotalCostPerStudent += school.costs.grandTotal;
+  }
+
+  const avgCostPerStudent = totalEnrollment > 0 ? totalCosts / totalEnrollment : 0;
+  const avgPctOfTuition = totalTuitionRevenue > 0 ? (totalCosts / totalTuitionRevenue) * 100 : 0;
+  const fixedCostPerStudent = totalEnrollment > 0 ? totalFixedCosts / totalEnrollment : 0;
+
+  const currentAvgCostPerStudent = currentTotalEnrollment > 0 ? totalCosts / currentTotalEnrollment : 0;
+  const savingsVsCurrent = currentAvgCostPerStudent - avgCostPerStudent;
+
+  return {
+    utilizationPct: targetUtilizationPct,
+    totalEnrollment,
+    avgCostPerStudent,
+    avgPctOfTuition,
+    fixedCostPerStudent,
+    savingsVsCurrent
+  };
+}
+
+// ============================================================================
+// AGGREGATION BY SCHOOL TYPE & TUITION TIER
+// ============================================================================
+
+export interface SegmentSummary {
+  segment: string;
+  schoolCount: number;
+  totalEnrollment: number;
+  totalCapacity: number;
+  utilizationPct: number;
+  totalCosts: number;
+  avgCostPerStudent: number;
+  avgPctOfTuition: number;
+  schools: SchoolData[];
+}
+
+export function aggregateBySchoolType(schools: SchoolData[]): SegmentSummary[] {
+  const segments: Record<SchoolType, SchoolData[]> = {
+    'alpha-school': [],
+    'microschool': [],
+    'gt-school': [],
+    'low-dollar': [],
+    'growth': []
+  };
+
+  for (const school of schools) {
+    segments[school.schoolType].push(school);
+  }
+
+  return Object.entries(segments)
+    .filter(([_, schoolList]) => schoolList.length > 0)
+    .map(([type, schoolList]) => {
+      const totalEnrollment = schoolList.reduce((sum, s) => sum + s.currentEnrollment, 0);
+      const totalCapacity = schoolList.reduce((sum, s) => sum + s.capacity, 0);
+      const totalCosts = schoolList.reduce((sum, s) => sum + s.costs.grandTotal, 0);
+      const totalRevenue = schoolList.reduce((sum, s) => sum + s.currentEnrollment * s.tuition, 0);
+
+      return {
+        segment: schoolTypeLabels[type as SchoolType],
+        schoolCount: schoolList.length,
+        totalEnrollment,
+        totalCapacity,
+        utilizationPct: totalCapacity > 0 ? (totalEnrollment / totalCapacity) * 100 : 0,
+        totalCosts,
+        avgCostPerStudent: totalEnrollment > 0 ? totalCosts / totalEnrollment : 0,
+        avgPctOfTuition: totalRevenue > 0 ? (totalCosts / totalRevenue) * 100 : 0,
+        schools: schoolList
+      };
+    })
+    .sort((a, b) => b.totalCosts - a.totalCosts);
+}
+
+export function aggregateByTuitionTier(schools: SchoolData[]): SegmentSummary[] {
+  const segments: Record<TuitionTier, SchoolData[]> = {
+    'premium': [],
+    'standard': [],
+    'value': [],
+    'economy': []
+  };
+
+  for (const school of schools) {
+    segments[school.tuitionTier].push(school);
+  }
+
+  return Object.entries(segments)
+    .filter(([_, schoolList]) => schoolList.length > 0)
+    .map(([tier, schoolList]) => {
+      const totalEnrollment = schoolList.reduce((sum, s) => sum + s.currentEnrollment, 0);
+      const totalCapacity = schoolList.reduce((sum, s) => sum + s.capacity, 0);
+      const totalCosts = schoolList.reduce((sum, s) => sum + s.costs.grandTotal, 0);
+      const totalRevenue = schoolList.reduce((sum, s) => sum + s.currentEnrollment * s.tuition, 0);
+
+      return {
+        segment: tuitionTierLabels[tier as TuitionTier],
+        schoolCount: schoolList.length,
+        totalEnrollment,
+        totalCapacity,
+        utilizationPct: totalCapacity > 0 ? (totalEnrollment / totalCapacity) * 100 : 0,
+        totalCosts,
+        avgCostPerStudent: totalEnrollment > 0 ? totalCosts / totalEnrollment : 0,
+        avgPctOfTuition: totalRevenue > 0 ? (totalCosts / totalRevenue) * 100 : 0,
+        schools: schoolList
+      };
+    })
+    .sort((a, b) => b.totalCosts - a.totalCosts);
+}
 
 // ============================================================================
 // PORTFOLIO SUMMARY
@@ -616,155 +644,106 @@ export interface PortfolioSummary {
   totalSchools: number;
   totalEnrollment: number;
   totalCapacity: number;
-  averageUtilization: number;
+  avgUtilization: number;
 
-  totalFacilitiesCosts: number;
-  totalCapex: number;
-  totalFixedCosts: number;
+  // 4-Category Totals
+  totalLease: number;
+  totalFixedFacilities: number;
+  totalVariableFacilities: number;
+  totalDepreciatedCapex: number;
+  grandTotal: number;
+  totalExcludingLease: number;
 
-  avgFacilitiesCostPerStudent: number;
-  avgFixedCostPerStudent: number;
-  avgFacilitiesPctOfTuition: number;
+  // Per-Student Metrics
+  avgCostPerStudent: number;
+  avgExclLeasePerStudent: number;
 
-  // By category
-  totalRent: number;
-  totalUtilities: number;
-  totalMaintenance: number;
-  totalSecurity: number;
-  totalOther: number;
-
-  // Breakdowns
-  costsByCategory: { category: string; amount: number; pctOfTotal: number }[];
-  schoolsByFacilitiesCost: { school: string; cost: number; pctOfTuition: number }[];
+  // Category Breakdown for Charts
+  categoryBreakdown: {
+    category: string;
+    amount: number;
+    pctOfTotal: number;
+    color: string;
+    subcategories?: { name: string; amount: number }[];
+  }[];
 }
 
-/**
- * Calculate portfolio-wide summary metrics
- */
-export function calculatePortfolioSummary(schools: School[]): PortfolioSummary {
+export function calculatePortfolioSummary(schools: SchoolData[]): PortfolioSummary {
   const totalEnrollment = schools.reduce((sum, s) => sum + s.currentEnrollment, 0);
   const totalCapacity = schools.reduce((sum, s) => sum + s.capacity, 0);
-  const totalFacilitiesCosts = schools.reduce((sum, s) => sum + s.facilitiesCostsTotal, 0);
-  const totalCapex = schools.reduce((sum, s) => sum + s.capex.total, 0);
-  const totalFixedCosts = schools.reduce((sum, s) => sum + s.metrics.fixedCostsTotal, 0);
 
-  const totalRent = schools.reduce((sum, s) => sum + s.facilitiesCosts.rent, 0);
-  const totalUtilities = schools.reduce((sum, s) => sum + s.facilitiesCosts.utilities, 0);
-  const totalMaintenance = schools.reduce((sum, s) => sum + s.facilitiesCosts.maintenance, 0);
-  const totalSecurity = schools.reduce((sum, s) => sum + s.facilitiesCosts.security, 0);
+  const totalLease = schools.reduce((sum, s) => sum + s.costs.lease.total, 0);
+  const totalFixedFacilities = schools.reduce((sum, s) => sum + s.costs.fixedFacilities.total, 0);
+  const totalVariableFacilities = schools.reduce((sum, s) => sum + s.costs.variableFacilities.total, 0);
+  const totalDepreciatedCapex = schools.reduce((sum, s) => sum + s.costs.depreciatedCapex.total, 0);
 
-  const costsByCategory = [
-    { category: 'Rent', amount: totalRent, pctOfTotal: (totalRent / totalFacilitiesCosts) * 100 },
-    { category: 'Maintenance', amount: totalMaintenance, pctOfTotal: (totalMaintenance / totalFacilitiesCosts) * 100 },
-    { category: 'Security', amount: totalSecurity, pctOfTotal: (totalSecurity / totalFacilitiesCosts) * 100 },
-    { category: 'Utilities', amount: totalUtilities, pctOfTotal: (totalUtilities / totalFacilitiesCosts) * 100 }
-  ].sort((a, b) => b.amount - a.amount);
+  const grandTotal = totalLease + totalFixedFacilities + totalVariableFacilities + totalDepreciatedCapex;
+  const totalExcludingLease = totalFixedFacilities + totalVariableFacilities + totalDepreciatedCapex;
 
-  const schoolsByFacilitiesCost = schools
-    .map(s => ({
-      school: s.displayName,
-      cost: s.facilitiesCostsTotal,
-      pctOfTuition: s.metrics.facilitiesPctOfTuitionCurrent
-    }))
-    .sort((a, b) => b.cost - a.cost);
+  // Subcategory totals
+  const totalSecurity = schools.reduce((sum, s) => sum + s.costs.fixedFacilities.security, 0);
+  const totalIT = schools.reduce((sum, s) => sum + s.costs.fixedFacilities.itMaintenance, 0);
+  const totalLandscaping = schools.reduce((sum, s) => sum + s.costs.fixedFacilities.landscaping, 0);
+  const totalJanitorial = schools.reduce((sum, s) => sum + s.costs.variableFacilities.janitorial, 0);
+  const totalUtilities = schools.reduce((sum, s) => sum + s.costs.variableFacilities.utilities, 0);
+  const totalRepairs = schools.reduce((sum, s) => sum + s.costs.variableFacilities.repairs, 0);
 
   return {
     totalSchools: schools.length,
     totalEnrollment,
     totalCapacity,
-    averageUtilization: totalCapacity > 0 ? (totalEnrollment / totalCapacity) * 100 : 0,
+    avgUtilization: totalCapacity > 0 ? (totalEnrollment / totalCapacity) * 100 : 0,
 
-    totalFacilitiesCosts,
-    totalCapex,
-    totalFixedCosts,
+    totalLease,
+    totalFixedFacilities,
+    totalVariableFacilities,
+    totalDepreciatedCapex,
+    grandTotal,
+    totalExcludingLease,
 
-    avgFacilitiesCostPerStudent: totalEnrollment > 0 ? totalFacilitiesCosts / totalEnrollment : 0,
-    avgFixedCostPerStudent: totalEnrollment > 0 ? totalFixedCosts / totalEnrollment : 0,
-    avgFacilitiesPctOfTuition: 0, // Would need weighted average
+    avgCostPerStudent: totalEnrollment > 0 ? grandTotal / totalEnrollment : 0,
+    avgExclLeasePerStudent: totalEnrollment > 0 ? totalExcludingLease / totalEnrollment : 0,
 
-    totalRent,
-    totalUtilities,
-    totalMaintenance,
-    totalSecurity,
-    totalOther: totalFacilitiesCosts - totalRent - totalUtilities - totalMaintenance - totalSecurity,
-
-    costsByCategory,
-    schoolsByFacilitiesCost
+    categoryBreakdown: [
+      {
+        category: 'Lease',
+        amount: totalLease,
+        pctOfTotal: (totalLease / grandTotal) * 100,
+        color: '#1e40af', // blue-800
+        subcategories: [{ name: 'Rent', amount: totalLease }]
+      },
+      {
+        category: 'Fixed Facilities Cost',
+        amount: totalFixedFacilities,
+        pctOfTotal: (totalFixedFacilities / grandTotal) * 100,
+        color: '#7c3aed', // violet-600
+        subcategories: [
+          { name: 'Security', amount: totalSecurity },
+          { name: 'IT Maintenance', amount: totalIT },
+          { name: 'Landscaping', amount: totalLandscaping }
+        ]
+      },
+      {
+        category: 'Variable Facilities Cost',
+        amount: totalVariableFacilities,
+        pctOfTotal: (totalVariableFacilities / grandTotal) * 100,
+        color: '#0d9488', // teal-600
+        subcategories: [
+          { name: 'Repairs', amount: totalRepairs },
+          { name: 'Utilities', amount: totalUtilities },
+          { name: 'Janitorial', amount: totalJanitorial }
+        ]
+      },
+      {
+        category: 'Depreciated Capex',
+        amount: totalDepreciatedCapex,
+        pctOfTotal: (totalDepreciatedCapex / grandTotal) * 100,
+        color: '#dc2626', // red-600
+        subcategories: [{ name: 'Depreciation/Amortization', amount: totalDepreciatedCapex }]
+      }
+    ].sort((a, b) => b.amount - a.amount)
   };
 }
-
-// ============================================================================
-// ANALYSIS VIEWS
-// ============================================================================
-
-export type AnalysisView =
-  | 'per-student-current'
-  | 'per-student-capacity'
-  | 'per-sqft'
-  | 'pct-of-tuition-current'
-  | 'pct-of-tuition-capacity'
-  | 'fixed-vs-variable'
-  | 'cost-breakdown';
-
-export interface ViewConfig {
-  id: AnalysisView;
-  name: string;
-  description: string;
-  primaryMetric: string;
-  unit: string;
-}
-
-export const analysisViews: ViewConfig[] = [
-  {
-    id: 'per-student-current',
-    name: 'Per Student (Current)',
-    description: 'Facilities cost per enrolled student at current enrollment',
-    primaryMetric: 'facilitiesCostPerStudentCurrent',
-    unit: '$/student'
-  },
-  {
-    id: 'per-student-capacity',
-    name: 'Per Student (At Capacity)',
-    description: 'Facilities cost per student if school reaches capacity',
-    primaryMetric: 'facilitiesCostPerStudentCapacity',
-    unit: '$/student'
-  },
-  {
-    id: 'pct-of-tuition-current',
-    name: '% of Tuition (Current)',
-    description: 'Facilities costs as percentage of current tuition revenue',
-    primaryMetric: 'facilitiesPctOfTuitionCurrent',
-    unit: '%'
-  },
-  {
-    id: 'pct-of-tuition-capacity',
-    name: '% of Tuition (At Capacity)',
-    description: 'Facilities costs as percentage of tuition revenue at capacity',
-    primaryMetric: 'facilitiesPctOfTuitionCapacity',
-    unit: '%'
-  },
-  {
-    id: 'per-sqft',
-    name: 'Per Square Foot',
-    description: 'Facilities cost per square foot (where available)',
-    primaryMetric: 'costPerSqFt',
-    unit: '$/sqft'
-  },
-  {
-    id: 'fixed-vs-variable',
-    name: 'Fixed vs Variable',
-    description: 'Breakdown of fixed costs that cannot be reduced vs variable costs',
-    primaryMetric: 'fixedCostsTotal',
-    unit: '$'
-  },
-  {
-    id: 'cost-breakdown',
-    name: 'Cost Breakdown',
-    description: 'Breakdown by cost category (rent, utilities, security, etc.)',
-    primaryMetric: 'facilitiesCostsTotal',
-    unit: '$'
-  }
-];
 
 // ============================================================================
 // KEY INSIGHTS
@@ -772,44 +751,148 @@ export const analysisViews: ViewConfig[] = [
 
 export interface Insight {
   id: string;
-  category: 'opportunity' | 'risk' | 'info';
+  category: 'fixed-cost-warning' | 'opportunity' | 'info';
   title: string;
   description: string;
   metric?: number;
   unit?: string;
-  schools?: string[];
 }
 
-export const keyInsights: Insight[] = [
+export function generateInsights(summary: PortfolioSummary): Insight[] {
+  const fixedPortion = summary.totalLease + summary.totalFixedFacilities + summary.totalDepreciatedCapex;
+  const fixedPct = (fixedPortion / summary.grandTotal) * 100;
+
+  return [
+    {
+      id: 'lease-commitment',
+      category: 'fixed-cost-warning',
+      title: 'Lease Commitment',
+      description: `${((summary.totalLease / summary.grandTotal) * 100).toFixed(0)}% of facilities costs are locked into lease agreements. This is the cost you commit to on day 1.`,
+      metric: summary.totalLease,
+      unit: '$ annual lease'
+    },
+    {
+      id: 'fixed-cost-burden',
+      category: 'fixed-cost-warning',
+      title: 'Total Fixed Cost Burden',
+      description: `${fixedPct.toFixed(0)}% of facilities costs (Lease + Fixed Facilities + Depreciated Capex) cannot scale down with enrollment.`,
+      metric: fixedPortion,
+      unit: '$ fixed costs'
+    },
+    {
+      id: 'excl-lease-spend',
+      category: 'info',
+      title: 'Total Excl. Lease',
+      description: 'After signing the lease, this is what you spend on fixed facilities, variable facilities, and depreciated capex annually.',
+      metric: summary.totalExcludingLease,
+      unit: '$ annual (excl. lease)'
+    },
+    {
+      id: 'per-student-burden',
+      category: 'info',
+      title: 'Per-Student Facilities Burden',
+      description: `At current enrollment, each student carries ${summary.avgCostPerStudent.toLocaleString('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 })} of facilities costs.`,
+      metric: summary.avgCostPerStudent,
+      unit: '$/student'
+    },
+    {
+      id: 'capacity-opportunity',
+      category: 'opportunity',
+      title: 'Utilization Opportunity',
+      description: `Portfolio is at ${summary.avgUtilization.toFixed(0)}% capacity. Reaching full capacity would spread fixed costs across ${summary.totalCapacity - summary.totalEnrollment} more students.`,
+      metric: summary.avgUtilization,
+      unit: '% utilization'
+    }
+  ];
+}
+
+// ============================================================================
+// EXPENSE BEHAVIOR RULES (for reference)
+// ============================================================================
+
+export type CostBehavior = 'fixed' | 'semi-variable' | 'variable';
+
+export interface ExpenseRule {
+  id: string;
+  name: string;
+  category: 'lease' | 'fixed-facilities' | 'variable-facilities' | 'depreciated-capex';
+  costType: CostBehavior;
+  fixedPercent: number;
+  variablePercent: number;
+  description: string;
+}
+
+export const expenseRules: ExpenseRule[] = [
   {
-    id: 'rent-concentration',
-    category: 'risk',
-    title: 'Rent Concentration',
-    description: 'Rent is the largest fixed cost category, representing the most "locked in" facility expense that cannot be reduced without relocating.',
-    metric: 1240852,
-    unit: '$ total annual rent'
+    id: 'rent',
+    name: 'Rent',
+    category: 'lease',
+    costType: 'fixed',
+    fixedPercent: 1.0,
+    variablePercent: 0,
+    description: 'Lease commitment - locked in on day 1, cannot be reduced without relocating'
   },
   {
-    id: 'austin-dominance',
-    category: 'info',
-    title: 'Austin K-8 Facilities Load',
-    description: 'Austin K-8 accounts for the majority of total facilities costs due to its large campus and training hub role.',
-    metric: 1063482,
-    unit: '$ annual facilities'
+    id: 'security',
+    name: 'Security Services',
+    category: 'fixed-facilities',
+    costType: 'fixed',
+    fixedPercent: 0.9,
+    variablePercent: 0.1,
+    description: 'Base security required regardless of enrollment; minimal scaling'
   },
   {
-    id: 'underutilization-impact',
-    category: 'risk',
-    title: 'Fixed Costs at Low Utilization',
-    description: 'Schools below 50% capacity utilization are absorbing full fixed costs across fewer students, dramatically increasing per-student facility burden.',
-    schools: ['alpha-tampa', 'waypoint-academy', 'alpha-chantilly']
+    id: 'it-maintenance',
+    name: 'IT Maintenance / Internet',
+    category: 'fixed-facilities',
+    costType: 'fixed',
+    fixedPercent: 0.85,
+    variablePercent: 0.15,
+    description: 'Core infrastructure fixed; device/license costs scale slightly'
   },
   {
-    id: 'capacity-opportunity',
-    category: 'opportunity',
-    title: 'At-Capacity Improvement',
-    description: 'Reaching capacity would spread fixed facilities costs across more students, reducing per-student burden by 40-60% at most schools.',
-    metric: 45,
-    unit: '% average potential reduction'
+    id: 'landscaping',
+    name: 'Landscaping',
+    category: 'fixed-facilities',
+    costType: 'fixed',
+    fixedPercent: 1.0,
+    variablePercent: 0,
+    description: 'Grounds maintenance driven by space, not student count'
+  },
+  {
+    id: 'janitorial',
+    name: 'Janitorial / Toiletries',
+    category: 'variable-facilities',
+    costType: 'semi-variable',
+    fixedPercent: 0.6,
+    variablePercent: 0.4,
+    description: 'Base cleaning fixed; supplies scale with occupancy'
+  },
+  {
+    id: 'utilities',
+    name: 'Utilities',
+    category: 'variable-facilities',
+    costType: 'semi-variable',
+    fixedPercent: 0.5,
+    variablePercent: 0.5,
+    description: 'Base heating/cooling fixed; marginal usage scales with occupancy'
+  },
+  {
+    id: 'repairs',
+    name: 'Repairs / Maintenance',
+    category: 'variable-facilities',
+    costType: 'semi-variable',
+    fixedPercent: 0.6,
+    variablePercent: 0.4,
+    description: 'Building maintenance mostly fixed; wear increases with usage'
+  },
+  {
+    id: 'depreciation',
+    name: 'Depreciation / Amortization',
+    category: 'depreciated-capex',
+    costType: 'fixed',
+    fixedPercent: 1.0,
+    variablePercent: 0,
+    description: 'Capex depreciation is fully fixed - sunk cost from initial investment'
   }
 ];
