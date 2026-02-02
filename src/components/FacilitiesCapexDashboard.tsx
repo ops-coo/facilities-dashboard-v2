@@ -149,6 +149,208 @@ const UtilizationBadge: React.FC<{ rate: number }> = ({ rate }) => {
 // ============================================================================
 
 // ============================================================================
+// DECISION RECOMMENDATION PANEL (Andy-style)
+// ============================================================================
+
+const DecisionPanel: React.FC<{ schools: SchoolData[]; summary: PortfolioSummary }> = ({ schools, summary }) => {
+  // Find schools with issues
+  const underutilized = schools.filter(s => s.utilizationRate < 0.5);
+  const cantReach15 = schools.filter(s => s.breakeven.studentsFor15Pct > s.capacity);
+
+  // Top opportunities
+  const opportunities = [...schools]
+    .filter(s => s.utilizationRate < 0.8)
+    .sort((a, b) => {
+      // Score by potential improvement
+      const aGap = a.capacity - a.currentEnrollment;
+      const bGap = b.capacity - b.currentEnrollment;
+      return bGap - aGap;
+    })
+    .slice(0, 3);
+
+  // Lease concentration
+  const sortedByLease = [...schools].sort((a, b) => b.costs.lease.total - a.costs.lease.total);
+  const top3Lease = sortedByLease.slice(0, 3);
+  const top3LeasePct = (top3Lease.reduce((sum, s) => sum + s.costs.lease.total, 0) / summary.totalLease) * 100;
+
+  return (
+    <div className="bg-gradient-to-r from-gray-900 to-gray-800 rounded-lg shadow-lg p-6 text-white mb-6">
+      <div className="flex items-center gap-2 mb-4">
+        <span className="text-xl">📊</span>
+        <h2 className="text-lg font-bold">Decision Summary</h2>
+        <span className="text-xs text-gray-400 ml-auto">Andy-style: What does the data say?</span>
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+        {/* The Question */}
+        <div>
+          <div className="text-xs text-amber-400 uppercase tracking-wide mb-2">The Question</div>
+          <div className="text-sm text-gray-300">
+            How do we reduce facilities burden from <span className="font-bold text-white">{((summary.grandTotal / (summary.totalEnrollment * 40000)) * 100).toFixed(0)}%</span> of avg tuition to target <span className="font-bold text-green-400">15%</span>?
+          </div>
+        </div>
+
+        {/* Key Finding */}
+        <div>
+          <div className="text-xs text-amber-400 uppercase tracking-wide mb-2">Key Finding</div>
+          <div className="text-sm text-gray-300">
+            <span className="font-bold text-white">{underutilized.length}</span> schools under 50% capacity.
+            Filling these first is cheaper than signing new leases.
+          </div>
+          {underutilized.length > 0 && (
+            <div className="text-xs text-gray-400 mt-1">
+              ({underutilized.map(s => s.displayName.split(' ')[0]).join(', ')})
+            </div>
+          )}
+        </div>
+
+        {/* Concentration Risk */}
+        <div>
+          <div className="text-xs text-amber-400 uppercase tracking-wide mb-2">Lease Concentration</div>
+          <div className="text-sm text-gray-300">
+            Top 3 leases = <span className="font-bold text-white">{top3LeasePct.toFixed(0)}%</span> of total lease exposure
+          </div>
+          <div className="text-xs text-gray-400 mt-1">
+            {top3Lease.map(s => `${s.displayName.split(' ').slice(0, 2).join(' ')}: ${formatCurrency(s.costs.lease.total)}`).join(' • ')}
+          </div>
+        </div>
+      </div>
+
+      {/* Top 3 Actions */}
+      <div className="mt-6 pt-4 border-t border-gray-700">
+        <div className="text-xs text-amber-400 uppercase tracking-wide mb-3">Recommended Actions</div>
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          {opportunities.map((school, idx) => {
+            const studentsNeeded = school.capacity - school.currentEnrollment;
+            return (
+              <div key={school.id} className="bg-gray-700/50 rounded p-3">
+                <div className="flex items-center gap-2 mb-1">
+                  <span className="text-xs bg-amber-500 text-black px-1.5 py-0.5 rounded font-bold">#{idx + 1}</span>
+                  <span className="text-sm font-medium">{school.displayName}</span>
+                </div>
+                <div className="text-xs text-gray-400">
+                  Add <span className="text-green-400 font-medium">{studentsNeeded}</span> students → facilities drops to <span className="text-green-400 font-medium">{school.breakeven.pctAt100Capacity.toFixed(0)}%</span> of tuition
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* Warning if any schools can't reach 15% */}
+      {cantReach15.length > 0 && (
+        <div className="mt-4 p-3 bg-red-900/30 border border-red-500/50 rounded">
+          <div className="text-xs text-red-400">
+            ⚠️ <strong>{cantReach15.length} schools cannot reach 15% target even at full capacity:</strong>{' '}
+            {cantReach15.map(s => s.displayName.split(' ').slice(0, 2).join(' ')).join(', ')}
+            . Consider lease renegotiation or closure.
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
+// ============================================================================
+// NEW SCHOOL ECONOMICS CALCULATOR
+// ============================================================================
+
+const NewSchoolCalculator: React.FC = () => {
+  const [leaseAmount, setLeaseAmount] = React.useState(150000);
+  const [tuition, setTuition] = React.useState(40000);
+  const [fixedFacilitiesPct, setFixedFacilitiesPct] = React.useState(25); // % of lease for other fixed costs
+
+  const totalFixed = leaseAmount * (1 + fixedFacilitiesPct / 100);
+
+  const scenarios = [
+    { students: 15, label: '15 students' },
+    { students: 25, label: '25 students' },
+    { students: 40, label: '40 students' },
+    { students: 60, label: '60 students' },
+  ].map(s => ({
+    ...s,
+    costPerStudent: totalFixed / s.students,
+    pctOfTuition: (totalFixed / (s.students * tuition)) * 100,
+  }));
+
+  return (
+    <div className="bg-white rounded-lg shadow p-6 mb-6">
+      <h3 className="font-semibold text-gray-800 mb-4">New School Economics Calculator</h3>
+      <p className="text-sm text-gray-500 mb-4">Before signing a lease, understand your fixed cost burden at different enrollments.</p>
+
+      <div className="grid grid-cols-3 gap-4 mb-6">
+        <div>
+          <label className="block text-xs text-gray-500 mb-1">Annual Lease</label>
+          <input
+            type="number"
+            value={leaseAmount}
+            onChange={(e) => setLeaseAmount(Number(e.target.value))}
+            className="w-full border rounded px-3 py-2 text-sm"
+            step={10000}
+          />
+        </div>
+        <div>
+          <label className="block text-xs text-gray-500 mb-1">Tuition</label>
+          <input
+            type="number"
+            value={tuition}
+            onChange={(e) => setTuition(Number(e.target.value))}
+            className="w-full border rounded px-3 py-2 text-sm"
+            step={5000}
+          />
+        </div>
+        <div>
+          <label className="block text-xs text-gray-500 mb-1">Other Fixed Costs (% of lease)</label>
+          <input
+            type="number"
+            value={fixedFacilitiesPct}
+            onChange={(e) => setFixedFacilitiesPct(Number(e.target.value))}
+            className="w-full border rounded px-3 py-2 text-sm"
+            step={5}
+          />
+        </div>
+      </div>
+
+      <div className="text-sm text-gray-600 mb-4">
+        Total Fixed Costs: <strong>{formatCurrency(totalFixed)}</strong> (Lease + {fixedFacilitiesPct}% other)
+      </div>
+
+      <table className="w-full text-sm">
+        <thead className="bg-gray-50">
+          <tr>
+            <th className="px-3 py-2 text-left">Enrollment</th>
+            <th className="px-3 py-2 text-right">$/Student</th>
+            <th className="px-3 py-2 text-right">% of Tuition</th>
+            <th className="px-3 py-2 text-left">Verdict</th>
+          </tr>
+        </thead>
+        <tbody className="divide-y">
+          {scenarios.map(s => (
+            <tr key={s.students}>
+              <td className="px-3 py-2">{s.label}</td>
+              <td className="px-3 py-2 text-right">{formatCurrency(s.costPerStudent)}</td>
+              <td className="px-3 py-2 text-right font-medium">{s.pctOfTuition.toFixed(1)}%</td>
+              <td className="px-3 py-2">
+                <span className={`px-2 py-0.5 rounded text-xs ${
+                  s.pctOfTuition <= 15 ? 'bg-green-100 text-green-800' :
+                  s.pctOfTuition <= 20 ? 'bg-blue-100 text-blue-800' :
+                  s.pctOfTuition <= 30 ? 'bg-amber-100 text-amber-800' :
+                  'bg-red-100 text-red-800'
+                }`}>
+                  {s.pctOfTuition <= 15 ? '✓ Target' :
+                   s.pctOfTuition <= 20 ? 'Acceptable' :
+                   s.pctOfTuition <= 30 ? 'Warning' : '✗ Too High'}
+                </span>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+};
+
+// ============================================================================
 // SEGMENT SUMMARY TABLE
 // ============================================================================
 
@@ -652,12 +854,18 @@ const FacilitiesCapexDashboard: React.FC = () => {
           </div>
 
           <BreakevenTable schools={schools} />
+
+          {/* New School Calculator */}
+          <NewSchoolCalculator />
         </div>
       )}
 
       {/* OVERVIEW TAB */}
       {activeTab === 'overview' && (
         <>
+      {/* Decision Panel - Andy-style executive summary */}
+      <DecisionPanel schools={schools} summary={summary} />
+
       {/* Fixed Cost Warning Banner */}
       <div className="bg-amber-50 border border-amber-200 rounded-lg p-4 mb-6">
         <div className="flex items-start">
