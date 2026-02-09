@@ -591,6 +591,23 @@ const FacilitiesCapexDashboard: React.FC = () => {
             const sunkTotal = summary.totalLease + summary.totalAnnualDepreciation;
             const sunkPct = summary.grandTotal > 0 ? (sunkTotal / summary.grandTotal * 100).toFixed(0) : '0';
 
+            // CapEx cash exposure — the REAL capex story
+            const capexSortedSchools = [...schools].sort((a, b) => b.costs.capexBuildout - a.costs.capexBuildout);
+            const top5Capex = capexSortedSchools.slice(0, 5).reduce((s, sc) => s + sc.costs.capexBuildout, 0);
+            const topCapexPct = summary.totalCapexBuildout > 0 ? (top5Capex / summary.totalCapexBuildout * 100).toFixed(0) : '0';
+            const top5AvgPerSeat = (() => {
+              const t5 = capexSortedSchools.slice(0, 5);
+              const t5Cap = Math.max(t5.reduce((s, sc) => s + sc.capacity, 0), 1);
+              return Math.round(top5Capex / t5Cap);
+            })();
+            const capexBarData = capexSortedSchools.map(s => ({
+              name: s.displayName.length > 18 ? s.displayName.replace('Alpha ', 'A. ') : s.displayName,
+              buildout: s.costs.capexBuildout,
+              perSeat: Math.round(s.costs.capexBuildout / Math.max(s.capacity, 1)),
+              capacity: s.capacity,
+              isOperating: s.isOperating,
+            }));
+
             return (
               <>
                 {/* ===== HERO KPIs: Facilities Cost Story ===== */}
@@ -622,12 +639,10 @@ const FacilitiesCapexDashboard: React.FC = () => {
                     </div>
                     <div className="text-xs text-slate-500 mt-0.5">even at full capacity</div>
                   </div>
-                  <div className="bg-green-900/20 rounded-xl p-4 border border-green-800/50">
-                    <div className="text-[10px] text-green-400 uppercase tracking-wide font-medium">CapEx Variance</div>
-                    <div className={`text-xl font-bold mt-1 ${summary.totalCapexDelta > 0 ? 'text-amber-400' : 'text-green-400'}`}>
-                      {summary.totalCapexDelta > 0 ? '+' : ''}{formatCurrency(summary.totalCapexDelta)}
-                    </div>
-                    <div className="text-xs text-green-600 mt-0.5">CapEx is not the problem</div>
+                  <div className="bg-amber-900/20 rounded-xl p-4 border border-amber-800/50">
+                    <div className="text-[10px] text-amber-400 uppercase tracking-wide font-medium">CapEx Cash Deployed</div>
+                    <div className="text-xl font-bold text-amber-300 mt-1">{formatCurrency(summary.totalCapexBuildout)}</div>
+                    <div className="text-xs text-amber-600 mt-0.5">Top 5 = {topCapexPct}% of total</div>
                   </div>
                 </div>
 
@@ -746,6 +761,66 @@ const FacilitiesCapexDashboard: React.FC = () => {
                   </div>
                 </div>
 
+                {/* ===== ROW 3.5: CAPEX CASH EXPOSURE ===== */}
+                <div className="table-card rounded-xl overflow-hidden">
+                  <div className="px-5 py-3 bg-slate-800 text-white">
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <h3 className="font-semibold">CapEx Cash Exposure: New Buildouts vs Established Schools</h3>
+                        <p className="text-xs text-slate-300 mt-0.5">
+                          One-time cash outlay per school. Established MicroSchools: ~$25K. New Growth/Alpha buildouts: $400K–$1.8M.
+                          Top 5 account for {topCapexPct}% of all CapEx at ${top5AvgPerSeat.toLocaleString()}/seat avg.
+                        </p>
+                      </div>
+                      <div className="text-right flex-shrink-0 ml-4">
+                        <div className="text-lg font-bold text-white">{formatCurrency(summary.totalCapexBuildout)}</div>
+                        <div className="text-[10px] text-slate-400">total deployed</div>
+                      </div>
+                    </div>
+                  </div>
+                  <div className="p-4" style={{ height: Math.max(400, capexBarData.length * 26 + 60) }}>
+                    <ResponsiveContainer width="100%" height="100%">
+                      <BarChart data={capexBarData} layout="vertical" margin={{ left: 140, right: 60, top: 5, bottom: 5 }}>
+                        <CartesianGrid strokeDasharray="3 3" stroke="#334155" horizontal={false} />
+                        <XAxis
+                          type="number"
+                          tickFormatter={(v: number) => v >= 1000000 ? `$${(v / 1000000).toFixed(1)}M` : `$${(v / 1000).toFixed(0)}K`}
+                          stroke="#94a3b8" fontSize={11}
+                        />
+                        <YAxis type="category" dataKey="name" width={130} tick={{ fill: '#cbd5e1', fontSize: 11 }} tickLine={false} />
+                        <Tooltip
+                          content={({ active, payload }: any) => {
+                            if (!active || !payload?.length) return null;
+                            const d = payload[0].payload;
+                            return (
+                              <div className="bg-slate-800 border border-slate-600 rounded-lg p-2.5 text-xs shadow-xl">
+                                <div className="font-bold text-white text-sm mb-1">{d.name}</div>
+                                <div className="text-slate-300">CapEx Buildout: <span className="font-medium text-white">{formatCurrency(d.buildout)}</span></div>
+                                <div className="text-slate-300">Per Seat: <span className="font-medium text-white">${d.perSeat.toLocaleString()}</span></div>
+                                <div className="text-slate-300">Capacity: <span className="font-medium text-white">{d.capacity} seats</span></div>
+                                <div className="text-slate-400 mt-0.5">{d.isOperating ? 'Operating' : 'Pre-Opening'}</div>
+                              </div>
+                            );
+                          }}
+                        />
+                        <Bar dataKey="buildout" name="CapEx Buildout" barSize={14} radius={[0, 4, 4, 0]}>
+                          {capexBarData.map((entry, idx) => (
+                            <Cell
+                              key={idx}
+                              fill={entry.buildout > 500000 ? '#ef4444' : entry.buildout > 100000 ? '#f59e0b' : '#22c55e'}
+                            />
+                          ))}
+                        </Bar>
+                      </BarChart>
+                    </ResponsiveContainer>
+                  </div>
+                  <div className="px-5 pb-4 flex gap-5 text-xs text-slate-400">
+                    <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded bg-red-500" /> &gt;$500K</span>
+                    <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded bg-amber-500" /> $100K–$500K</span>
+                    <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded bg-green-500" /> &lt;$100K</span>
+                  </div>
+                </div>
+
                 {/* ===== ROW 4: SEGMENT COMPARISON + CONTROLLABILITY ===== */}
                 <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
 
@@ -840,15 +915,15 @@ const FacilitiesCapexDashboard: React.FC = () => {
                     <div className="font-semibold text-white text-base mb-2">The Bottom Line</div>
                     <div className="flex items-start gap-2">
                       <span className="text-red-400 font-bold mt-0.5">1.</span>
-                      <span><strong className="text-white">Facilities OpEx exceeds the approved model by {formatCurrency(portfolioOverrun)} (+{overrunPct}%).</strong> CapEx buildout is roughly on budget — the overrun is entirely operational. The model underestimated what it actually costs to run these buildings.</span>
+                      <span><strong className="text-white">Facilities OpEx exceeds the approved model by {formatCurrency(portfolioOverrun)} (+{overrunPct}%).</strong> The model underestimated what it actually costs to run these buildings — security, food services, and transportation alone account for {top3Pct}% of all facilities spend.</span>
                     </div>
                     <div className="flex items-start gap-2">
                       <span className="text-red-400 font-bold mt-0.5">2.</span>
-                      <span><strong className="text-white">Three cost lines account for {top3Pct}% of all facilities spend:</strong> {top3.map(d => d.name).join(', ')}. These are the negotiation targets — vendor contracts, service level adjustments, and scope reduction.</span>
+                      <span><strong className="text-white">CapEx cash exposure is concentrated in new buildouts.</strong> The top 5 schools account for {topCapexPct}% of the {formatCurrency(summary.totalCapexBuildout)} total, averaging ${top5AvgPerSeat.toLocaleString()}/seat. Established MicroSchools built out for ~$25K; new Growth/Alpha locations are running $400K–$1.8M — a fundamentally different cost profile that the original model didn&apos;t anticipate.</span>
                     </div>
                     <div className="flex items-start gap-2">
                       <span className="text-red-400 font-bold mt-0.5">3.</span>
-                      <span><strong className="text-white">Only {schoolsAtTarget}/{summary.totalSchools} schools can reach target margin even at 100% capacity.</strong> For the rest, facilities costs are structurally too high for the approved model to work. These need vendor renegotiation, service scope reduction, or model revision.</span>
+                      <span><strong className="text-white">Only {schoolsAtTarget}/{summary.totalSchools} schools can reach target margin even at 100% capacity.</strong> Facilities costs are structurally too high for the approved model to work. Both the ongoing OpEx overrun and the upfront cash exposure need to be addressed — vendor renegotiation, scope reduction, and realistic buildout budgets for new locations.</span>
                     </div>
                   </div>
                 </div>
