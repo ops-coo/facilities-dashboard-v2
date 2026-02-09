@@ -405,6 +405,9 @@ const FacilitiesCapexDashboard: React.FC = () => {
   const [expandedMarginType, setExpandedMarginType] = useState<SchoolType | null>(null);
   const [expandedTier, setExpandedTier] = useState<TuitionTier | null>(null);
   const [expandedCapexType, setExpandedCapexType] = useState<SchoolType | null>(null);
+  const [expandedFacBva, setExpandedFacBva] = useState<SchoolType[]>([]);
+  const [expandedCapexBva, setExpandedCapexBva] = useState<SchoolType[]>([]);
+  const [expandedUE, setExpandedUE] = useState<SchoolType[]>([]);
 
   // Sort state for each table
   const [overviewSort, setOverviewSort] = useState<{key: string; dir: 'asc'|'desc'}>({key: 'total', dir: 'desc'});
@@ -1169,13 +1172,6 @@ const FacilitiesCapexDashboard: React.FC = () => {
               { key: 'all', label: 'All' },
               ...Object.entries(schoolTypeLabels).map(([k, l]) => ({ key: k as SchoolType, label: l })),
             ];
-            const facSorted = [...schools].sort((a, b) => {
-              const capA = Math.max(a.capacity, 1); const capB = Math.max(b.capacity, 1);
-              const facVarA = (a.costs.lease.total + a.costs.fixedFacilities.total + a.costs.variableFacilities.total + a.costs.studentServices.total) - a.budget.modelFacPerStudent * capA;
-              const facVarB = (b.costs.lease.total + b.costs.fixedFacilities.total + b.costs.variableFacilities.total + b.costs.studentServices.total) - b.budget.modelFacPerStudent * capB;
-              return Math.abs(facVarB) - Math.abs(facVarA);
-            });
-            const capexSorted = [...schools].sort((a, b) => Math.abs(b.costs.capexBuildout - b.budget.capexBudget) - Math.abs(a.costs.capexBuildout - a.budget.capexBudget));
             const pCap = Math.max(summary.totalCapacity, 1);
             const pFacBudget = schools.reduce((s, sc) => s + sc.budget.modelFacPerStudent * sc.capacity, 0);
             const pFacActual = summary.totalLease + summary.totalFixedFacilities + summary.totalVariableFacilities + summary.totalStudentServices;
@@ -1335,66 +1331,76 @@ const FacilitiesCapexDashboard: React.FC = () => {
             </tr>
           </thead>
           <tbody className="divide-y divide-gray-200">
-                        {facSorted.map((school, idx) => {
-                          const cap = Math.max(school.capacity, 1);
-                          const budget = school.budget.modelFacPerStudent * cap;
-                          const actual = school.costs.lease.total + school.costs.fixedFacilities.total + school.costs.variableFacilities.total + school.costs.studentServices.total;
-                          const budgetPS = budget / cap;
-                          const actualPS = actual / cap;
-                          const absVar = actual - budget;
-                          const varPS = absVar / cap;
-                          const budgetPctT = school.tuition > 0 ? (budgetPS / school.tuition) * 100 : 0;
-                          const actualPctT = school.tuition > 0 ? (actualPS / school.tuition) * 100 : 0;
-                          const varPctT = school.tuition > 0 ? (varPS / school.tuition) * 100 : 0;
-                          const over = varPS > 0;
-              return (
-                            <tr key={school.id} className={`hover:bg-slate-700/40 cursor-pointer `} onClick={() => setSelectedSchool(school)}>
-                              <td className={`px-2 py-2 sticky left-0 z-10 ${idx % 2 === 1 ? '' : ''}`} style={{boxShadow: '2px 0 4px -2px rgba(0,0,0,0.06)'}}>
-                                <div className="font-medium text-slate-100 text-sm">{school.displayName}</div>
-                                <div className="text-[11px] text-slate-400">{schoolTypeLabels[school.schoolType]} | ${school.tuition.toLocaleString()} | <span className={school.isOperating ? 'text-green-400' : 'text-slate-500'}>{school.isOperating ? 'Operating' : 'Pre-Opening'}</span></div>
-                  </td>
-                              <td className="px-2 py-2 text-center">{school.capacity}</td>
-                              <td className="px-2 py-2 text-right">{formatCurrency(budget)}</td>
-                              <td className="px-2 py-2 text-right">
-                                <div>{fmt(budgetPS)}</div>
-                                <div className="text-[10px] text-slate-400">{budgetPctT.toFixed(1)}%</div>
-                              </td>
-                              <td className="px-2 py-2 text-right">{formatCurrency(actual)}</td>
-                              <td className="px-2 py-2 text-right">
-                                <div>{fmt(actualPS)}</div>
-                                <div className="text-[10px] text-slate-400">{actualPctT.toFixed(1)}%</div>
-                              </td>
-                              <td className={`px-2 py-2 text-right font-medium ${over ? 'text-red-400' : 'text-green-400'}`}>
-                                {over ? '+' : ''}{formatCurrency(absVar)}
-                              </td>
-                              <td className={`px-2 py-2 text-right answer-glow ${over ? 'text-red-400' : 'text-green-400'}`}>
-                                <div className="font-bold">{over ? '+' : ''}{fmt(varPS)}</div>
-                                <div className="text-[10px] text-slate-400">{varPctT >= 0 ? '+' : ''}{varPctT.toFixed(1)}%</div>
-                              </td>
-                </tr>
-              );
-            })}
-                        {(() => {
-                          const pBudgetPS = pFacBudget / pCap;
-                          const pActualPS = pFacActual / pCap;
-                          const pVarPS = pFacVar / pCap;
+                        {(['alpha-school', 'growth-alpha', 'microschool', 'alternative', 'low-dollar'] as SchoolType[]).map(type => {
+                          const ts = schools.filter(s => s.schoolType === type);
+                          if (ts.length === 0) return null;
+                          const isExp = expandedFacBva.includes(type);
+                          const tCap = Math.max(ts.reduce((s, sc) => s + sc.capacity, 0), 1);
+                          const tBudget = ts.reduce((s, sc) => s + sc.budget.modelFacPerStudent * sc.capacity, 0);
+                          const tActual = ts.reduce((s, sc) => s + sc.costs.lease.total + sc.costs.fixedFacilities.total + sc.costs.variableFacilities.total + sc.costs.studentServices.total, 0);
+                          const tVar = tActual - tBudget;
+                          const tVarPS = tVar / tCap;
+                          const tOver = tVarPS > 0;
                           return (
-            <tr className="bg-gray-100 font-bold border-t-2 border-gray-400">
-                              <td className="px-2 py-3">PORTFOLIO</td>
-                              <td className="px-2 py-3 text-center">{summary.totalCapacity}</td>
-                              <td className="px-2 py-3 text-right">{formatCurrency(pFacBudget)}</td>
-                              <td className="px-2 py-3 text-right">{fmt(pBudgetPS)}</td>
-                              <td className="px-2 py-3 text-right">{formatCurrency(pFacActual)}</td>
-                              <td className="px-2 py-3 text-right">{fmt(pActualPS)}</td>
-                              <td className={`px-2 py-3 text-right ${pFacVar > 0 ? 'text-red-400' : 'text-green-400'}`}>
-                                {pFacVar > 0 ? '+' : ''}{formatCurrency(pFacVar)}
-                              </td>
-                              <td className={`px-2 py-3 text-right ${pFacVar > 0 ? 'text-red-400' : 'text-green-400'}`}>
-                                {pFacVar > 0 ? '+' : ''}{fmt(pVarPS)}
-                              </td>
-            </tr>
+                            <React.Fragment key={type}>
+                              <tr className="bg-slate-700/30 cursor-pointer hover:bg-slate-700/50" onClick={() => setExpandedFacBva(prev => prev.includes(type) ? prev.filter(t => t !== type) : [...prev, type])}>
+                                <td className="px-2 py-2.5 sticky left-0 z-10" style={{boxShadow: '2px 0 4px -2px rgba(0,0,0,0.06)'}}>
+                                  <div className="font-bold text-white text-sm"><span className="text-slate-400 mr-1.5 text-xs">{isExp ? '▼' : '▶'}</span>{schoolTypeLabels[type]} ({ts.length})</div>
+                                </td>
+                                <td className="px-2 py-2.5 text-center font-semibold">{tCap}</td>
+                                <td className="px-2 py-2.5 text-right font-semibold">{formatCurrency(tBudget)}</td>
+                                <td className="px-2 py-2.5 text-right font-semibold">{fmt(tBudget / tCap)}</td>
+                                <td className="px-2 py-2.5 text-right font-semibold">{formatCurrency(tActual)}</td>
+                                <td className="px-2 py-2.5 text-right font-semibold">{fmt(tActual / tCap)}</td>
+                                <td className={`px-2 py-2.5 text-right font-bold ${tOver ? 'text-red-400' : 'text-green-400'}`}>{tOver ? '+' : ''}{formatCurrency(tVar)}</td>
+                                <td className={`px-2 py-2.5 text-right font-bold ${tOver ? 'text-red-400' : 'text-green-400'}`}>{tOver ? '+' : ''}{fmt(tVarPS)}</td>
+                              </tr>
+                              {isExp && [...ts].sort((a, b) => {
+                                const vA = (a.costs.lease.total + a.costs.fixedFacilities.total + a.costs.variableFacilities.total + a.costs.studentServices.total) / Math.max(a.capacity, 1) - a.budget.modelFacPerStudent;
+                                const vB = (b.costs.lease.total + b.costs.fixedFacilities.total + b.costs.variableFacilities.total + b.costs.studentServices.total) / Math.max(b.capacity, 1) - b.budget.modelFacPerStudent;
+                                return Math.abs(vB) - Math.abs(vA);
+                              }).map((school) => {
+                                const cap = Math.max(school.capacity, 1);
+                                const budget = school.budget.modelFacPerStudent * cap;
+                                const actual = school.costs.lease.total + school.costs.fixedFacilities.total + school.costs.variableFacilities.total + school.costs.studentServices.total;
+                                const budgetPS = budget / cap; const actualPS = actual / cap;
+                                const absVar = actual - budget; const varPS = absVar / cap;
+                                const budgetPctT = school.tuition > 0 ? (budgetPS / school.tuition) * 100 : 0;
+                                const actualPctT = school.tuition > 0 ? (actualPS / school.tuition) * 100 : 0;
+                                const varPctT = school.tuition > 0 ? (varPS / school.tuition) * 100 : 0;
+                                const over = varPS > 0;
+                                return (
+                                  <tr key={school.id} className="hover:bg-slate-700/40 cursor-pointer bg-slate-800/20" onClick={() => setSelectedSchool(school)}>
+                                    <td className="px-2 py-2 pl-8 sticky left-0 z-10" style={{boxShadow: '2px 0 4px -2px rgba(0,0,0,0.06)'}}>
+                                      <div className="font-medium text-slate-200 text-sm">{school.displayName}</div>
+                                      <div className="text-[11px] text-slate-500">${school.tuition.toLocaleString()} | <span className={school.isOperating ? 'text-green-400' : 'text-slate-500'}>{school.isOperating ? 'Operating' : 'Pre-Opening'}</span></div>
+                                    </td>
+                                    <td className="px-2 py-2 text-center">{school.capacity}</td>
+                                    <td className="px-2 py-2 text-right">{formatCurrency(budget)}</td>
+                                    <td className="px-2 py-2 text-right"><div>{fmt(budgetPS)}</div><div className="text-[10px] text-slate-400">{budgetPctT.toFixed(1)}%</div></td>
+                                    <td className="px-2 py-2 text-right">{formatCurrency(actual)}</td>
+                                    <td className="px-2 py-2 text-right"><div>{fmt(actualPS)}</div><div className="text-[10px] text-slate-400">{actualPctT.toFixed(1)}%</div></td>
+                                    <td className={`px-2 py-2 text-right font-medium ${over ? 'text-red-400' : 'text-green-400'}`}>{over ? '+' : ''}{formatCurrency(absVar)}</td>
+                                    <td className={`px-2 py-2 text-right ${over ? 'text-red-400' : 'text-green-400'}`}>
+                                      <div className="font-bold">{over ? '+' : ''}{fmt(varPS)}</div>
+                                      <div className="text-[10px] text-slate-400">{varPctT >= 0 ? '+' : ''}{varPctT.toFixed(1)}%</div>
+                                    </td>
+                                  </tr>
+                                );
+                              })}
+                            </React.Fragment>
                           );
-                        })()}
+                        })}
+                        <tr className="bg-gray-100 font-bold border-t-2 border-gray-400">
+                          <td className="px-2 py-3">PORTFOLIO</td>
+                          <td className="px-2 py-3 text-center">{summary.totalCapacity}</td>
+                          <td className="px-2 py-3 text-right">{formatCurrency(pFacBudget)}</td>
+                          <td className="px-2 py-3 text-right">{fmt(pFacBudget / pCap)}</td>
+                          <td className="px-2 py-3 text-right">{formatCurrency(pFacActual)}</td>
+                          <td className="px-2 py-3 text-right">{fmt(pFacActual / pCap)}</td>
+                          <td className={`px-2 py-3 text-right ${pFacVar > 0 ? 'text-red-400' : 'text-green-400'}`}>{pFacVar > 0 ? '+' : ''}{formatCurrency(pFacVar)}</td>
+                          <td className={`px-2 py-3 text-right ${pFacVar > 0 ? 'text-red-400' : 'text-green-400'}`}>{pFacVar > 0 ? '+' : ''}{fmt(pFacVar / pCap)}</td>
+                        </tr>
           </tbody>
         </table>
       </div>
@@ -1422,50 +1428,69 @@ const FacilitiesCapexDashboard: React.FC = () => {
             </tr>
           </thead>
           <tbody className="divide-y divide-gray-200">
-                        {capexSorted.map((school, idx) => {
-                          const cap = Math.max(school.capacity, 1);
-                          const budget = school.budget.capexBudget;
-                          const actual = school.costs.capexBuildout;
-                          const annDepr = school.costs.annualDepreciation.total;
-                          const deprPeriod = annDepr > 0 ? actual / annDepr : 10;
-                          const budgetDepr = budget / deprPeriod;
-                          const absVar = actual - budget;
-                          const deprVarPS = (annDepr - budgetDepr) / cap;
-                          const pctT = school.tuition > 0 ? (deprVarPS / school.tuition) * 100 : 0;
-                          const isAbsOver = absVar > 0;
-                          const isDeprOver = deprVarPS > 0;
-              return (
-                            <tr key={school.id} className={`hover:bg-slate-700/40 cursor-pointer `} onClick={() => setSelectedSchool(school)}>
-                              <td className={`px-2 py-2 sticky left-0 z-10 ${idx % 2 === 1 ? '' : ''}`} style={{boxShadow: '2px 0 4px -2px rgba(0,0,0,0.06)'}}>
-                                <div className="font-medium text-slate-100 text-sm">{school.displayName}</div>
-                                <div className="text-[11px] text-slate-400">{schoolTypeLabels[school.schoolType]} | ${school.tuition.toLocaleString()} | <span className={school.isOperating ? 'text-green-400' : 'text-slate-500'}>{school.isOperating ? 'Operating' : 'Pre-Opening'}</span></div>
-                  </td>
-                              <td className="px-2 py-2 text-center">{school.capacity}</td>
-                              <td className="px-2 py-2 text-right">{formatCurrency(budget)}</td>
-                              <td className="px-2 py-2 text-right text-slate-600">{formatCurrency(budgetDepr)}<span className="text-[10px] text-slate-400">/yr</span></td>
-                              <td className="px-2 py-2 text-right">{formatCurrency(actual)}</td>
-                              <td className="px-2 py-2 text-right text-slate-600">{formatCurrency(annDepr)}<span className="text-[10px] text-slate-400">/yr</span></td>
-                              <td className={`px-2 py-2 text-right font-medium ${isAbsOver ? 'text-red-400' : 'text-green-400'}`}>
-                                {isAbsOver ? '+' : ''}{formatCurrency(absVar)}
-                  </td>
-                              <td className={`px-2 py-2 text-right font-medium ${isDeprOver ? 'text-red-400' : 'text-green-400'}`}>
-                                {isDeprOver ? '+' : ''}{formatCurrency(annDepr - budgetDepr)}
-                  </td>
-                              <td className={`px-2 py-2 text-right answer-glow ${isDeprOver ? 'text-red-400' : 'text-green-400'}`}>
-                                <div className="font-bold">{isDeprOver ? '+' : ''}{fmt(deprVarPS)}</div>
-                                <div className="text-[10px] text-slate-400">{pctT >= 0 ? '+' : ''}{pctT.toFixed(1)}%</div>
-                  </td>
-                            </tr>
+                        {(['alpha-school', 'growth-alpha', 'microschool', 'alternative', 'low-dollar'] as SchoolType[]).map(type => {
+                          const ts = schools.filter(s => s.schoolType === type);
+                          if (ts.length === 0) return null;
+                          const isExp = expandedCapexBva.includes(type);
+                          const tCap = Math.max(ts.reduce((s, sc) => s + sc.capacity, 0), 1);
+                          const tBudget = ts.reduce((s, sc) => s + sc.budget.capexBudget, 0);
+                          const tActual = ts.reduce((s, sc) => s + sc.costs.capexBuildout, 0);
+                          const tDepr = ts.reduce((s, sc) => s + sc.costs.annualDepreciation.total, 0);
+                          const tDeprPeriod = tDepr > 0 ? tActual / tDepr : 10;
+                          const tBudgetDepr = tBudget / tDeprPeriod;
+                          const tAbsVar = tActual - tBudget;
+                          const tDeprVarPS = (tDepr - tBudgetDepr) / tCap;
+                          return (
+                            <React.Fragment key={type}>
+                              <tr className="bg-slate-700/30 cursor-pointer hover:bg-slate-700/50" onClick={() => setExpandedCapexBva(prev => prev.includes(type) ? prev.filter(t => t !== type) : [...prev, type])}>
+                                <td className="px-2 py-2.5 sticky left-0 z-10" style={{boxShadow: '2px 0 4px -2px rgba(0,0,0,0.06)'}}>
+                                  <div className="font-bold text-white text-sm"><span className="text-slate-400 mr-1.5 text-xs">{isExp ? '▼' : '▶'}</span>{schoolTypeLabels[type]} ({ts.length})</div>
+                                </td>
+                                <td className="px-2 py-2.5 text-center font-semibold">{tCap}</td>
+                                <td className="px-2 py-2.5 text-right font-semibold">{formatCurrency(tBudget)}</td>
+                                <td className="px-2 py-2.5 text-right font-semibold text-slate-600">{formatCurrency(tBudgetDepr)}<span className="text-[10px] text-slate-400">/yr</span></td>
+                                <td className="px-2 py-2.5 text-right font-semibold">{formatCurrency(tActual)}</td>
+                                <td className="px-2 py-2.5 text-right font-semibold text-slate-600">{formatCurrency(tDepr)}<span className="text-[10px] text-slate-400">/yr</span></td>
+                                <td className={`px-2 py-2.5 text-right font-bold ${tAbsVar > 0 ? 'text-red-400' : 'text-green-400'}`}>{tAbsVar > 0 ? '+' : ''}{formatCurrency(tAbsVar)}</td>
+                                <td className={`px-2 py-2.5 text-right font-bold ${(tDepr - tBudgetDepr) > 0 ? 'text-red-400' : 'text-green-400'}`}>{(tDepr - tBudgetDepr) > 0 ? '+' : ''}{formatCurrency(tDepr - tBudgetDepr)}</td>
+                                <td className={`px-2 py-2.5 text-right font-bold ${tDeprVarPS > 0 ? 'text-red-400' : 'text-green-400'}`}>{tDeprVarPS > 0 ? '+' : ''}{fmt(tDeprVarPS)}</td>
+                              </tr>
+                              {isExp && [...ts].sort((a, b) => Math.abs(b.costs.capexBuildout - b.budget.capexBudget) - Math.abs(a.costs.capexBuildout - a.budget.capexBudget)).map(school => {
+                                const cap = Math.max(school.capacity, 1);
+                                const budget = school.budget.capexBudget; const actual = school.costs.capexBuildout;
+                                const annDepr = school.costs.annualDepreciation.total;
+                                const deprPeriod = annDepr > 0 ? actual / annDepr : 10;
+                                const budgetDepr = budget / deprPeriod; const absVar = actual - budget;
+                                const deprVarPS = (annDepr - budgetDepr) / cap;
+                                const pctT = school.tuition > 0 ? (deprVarPS / school.tuition) * 100 : 0;
+                                return (
+                                  <tr key={school.id} className="hover:bg-slate-700/40 cursor-pointer bg-slate-800/20" onClick={() => setSelectedSchool(school)}>
+                                    <td className="px-2 py-2 pl-8 sticky left-0 z-10" style={{boxShadow: '2px 0 4px -2px rgba(0,0,0,0.06)'}}>
+                                      <div className="font-medium text-slate-200 text-sm">{school.displayName}</div>
+                                      <div className="text-[11px] text-slate-500">${school.tuition.toLocaleString()} | <span className={school.isOperating ? 'text-green-400' : 'text-slate-500'}>{school.isOperating ? 'Operating' : 'Pre-Opening'}</span></div>
+                                    </td>
+                                    <td className="px-2 py-2 text-center">{school.capacity}</td>
+                                    <td className="px-2 py-2 text-right">{formatCurrency(budget)}</td>
+                                    <td className="px-2 py-2 text-right text-slate-600">{formatCurrency(budgetDepr)}<span className="text-[10px] text-slate-400">/yr</span></td>
+                                    <td className="px-2 py-2 text-right">{formatCurrency(actual)}</td>
+                                    <td className="px-2 py-2 text-right text-slate-600">{formatCurrency(annDepr)}<span className="text-[10px] text-slate-400">/yr</span></td>
+                                    <td className={`px-2 py-2 text-right font-medium ${absVar > 0 ? 'text-red-400' : 'text-green-400'}`}>{absVar > 0 ? '+' : ''}{formatCurrency(absVar)}</td>
+                                    <td className={`px-2 py-2 text-right font-medium ${(annDepr - budgetDepr) > 0 ? 'text-red-400' : 'text-green-400'}`}>{(annDepr - budgetDepr) > 0 ? '+' : ''}{formatCurrency(annDepr - budgetDepr)}</td>
+                                    <td className={`px-2 py-2 text-right ${deprVarPS > 0 ? 'text-red-400' : 'text-green-400'}`}>
+                                      <div className="font-bold">{deprVarPS > 0 ? '+' : ''}{fmt(deprVarPS)}</div>
+                                      <div className="text-[10px] text-slate-400">{pctT >= 0 ? '+' : ''}{pctT.toFixed(1)}%</div>
+                                    </td>
+                                  </tr>
+                                );
+                              })}
+                            </React.Fragment>
                           );
                         })}
                         {(() => {
-                          const pBudget = summary.totalCapexBudget;
-                          const pActual = summary.totalCapexBuildout;
+                          const pBudget = summary.totalCapexBudget; const pActual = summary.totalCapexBuildout;
                           const pDeprPeriod = summary.totalAnnualDepreciation > 0 ? pActual / summary.totalAnnualDepreciation : 10;
-                          const pBudgetDepr = pBudget / pDeprPeriod;
-                          const pActualDepr = summary.totalAnnualDepreciation;
-                          const pAbsVar = pActual - pBudget;
-                          const pDeprVarPS = (pActualDepr - pBudgetDepr) / pCap;
+                          const pBudgetDepr = pBudget / pDeprPeriod; const pActualDepr = summary.totalAnnualDepreciation;
+                          const pAbsVar = pActual - pBudget; const pDeprVarPS = (pActualDepr - pBudgetDepr) / pCap;
                           return (
                             <tr className="bg-gray-100 font-bold border-t-2 border-gray-400">
                               <td className="px-2 py-3">PORTFOLIO</td>
@@ -1474,17 +1499,11 @@ const FacilitiesCapexDashboard: React.FC = () => {
                               <td className="px-2 py-3 text-right text-slate-700">{formatCurrency(pBudgetDepr)}<span className="text-[10px] text-slate-400">/yr</span></td>
                               <td className="px-2 py-3 text-right">{formatCurrency(pActual)}</td>
                               <td className="px-2 py-3 text-right text-slate-700">{formatCurrency(pActualDepr)}<span className="text-[10px] text-slate-400">/yr</span></td>
-                              <td className={`px-2 py-3 text-right ${pAbsVar > 0 ? 'text-red-400' : 'text-green-400'}`}>
-                                {pAbsVar > 0 ? '+' : ''}{formatCurrency(pAbsVar)}
-                  </td>
-                              <td className={`px-2 py-3 text-right ${(pActualDepr - pBudgetDepr) > 0 ? 'text-red-400' : 'text-green-400'}`}>
-                                {(pActualDepr - pBudgetDepr) > 0 ? '+' : ''}{formatCurrency(pActualDepr - pBudgetDepr)}
-                  </td>
-                              <td className={`px-2 py-3 text-right ${pDeprVarPS > 0 ? 'text-red-400' : 'text-green-400'}`}>
-                                {pDeprVarPS > 0 ? '+' : ''}{fmt(pDeprVarPS)}
-                  </td>
-                </tr>
-              );
+                              <td className={`px-2 py-3 text-right ${pAbsVar > 0 ? 'text-red-400' : 'text-green-400'}`}>{pAbsVar > 0 ? '+' : ''}{formatCurrency(pAbsVar)}</td>
+                              <td className={`px-2 py-3 text-right ${(pActualDepr - pBudgetDepr) > 0 ? 'text-red-400' : 'text-green-400'}`}>{(pActualDepr - pBudgetDepr) > 0 ? '+' : ''}{formatCurrency(pActualDepr - pBudgetDepr)}</td>
+                              <td className={`px-2 py-3 text-right ${pDeprVarPS > 0 ? 'text-red-400' : 'text-green-400'}`}>{pDeprVarPS > 0 ? '+' : ''}{fmt(pDeprVarPS)}</td>
+                            </tr>
+                          );
                         })()}
           </tbody>
         </table>
@@ -1818,66 +1837,84 @@ const FacilitiesCapexDashboard: React.FC = () => {
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-200">
-                        {[...schools].sort((a, b) => {
-                          const ueA = calculateUnitEconomics(a.tuition, a.capacity,
-                            a.costs.lease.total + a.costs.fixedFacilities.total + a.costs.variableFacilities.total + a.costs.studentServices.total,
-                            a.costs.annualDepreciation.total);
-                          const ueB = calculateUnitEconomics(b.tuition, b.capacity,
-                            b.costs.lease.total + b.costs.fixedFacilities.total + b.costs.variableFacilities.total + b.costs.studentServices.total,
-                            b.costs.annualDepreciation.total);
-                          return ueA.marginPct - ueB.marginPct;
-                        }).map((school, idx) => {
-                          const facTotal = school.costs.lease.total + school.costs.fixedFacilities.total + school.costs.variableFacilities.total + school.costs.studentServices.total;
-                          const ue = calculateUnitEconomics(school.tuition, school.capacity, facTotal, school.costs.annualDepreciation.total);
-                          // Model margin: using budgeted facility costs instead of actual
-                          const modelFacTotal = school.budget.modelFacPerStudent * school.capacity;
-                          const modelCapexAnn = school.budget.capexBudget / 10; // 10yr depr
-                          const ueModel = calculateUnitEconomics(school.tuition, school.capacity, modelFacTotal, modelCapexAnn);
-                          const target = getTargetPct(school.tuition);
-                          const hitsTarget = ue.marginPct >= target;
-                          const marginGap = ue.marginPct - ueModel.marginPct;
-                          const facGapPS = ue.facilitiesPerStudent - ueModel.facilitiesPerStudent;
-
-                return (
-                            <tr key={school.id} className={`hover:bg-slate-700/40 cursor-pointer `} onClick={() => setSelectedSchool(school)}>
-                              <td className={`px-2 py-2 sticky left-0 z-10 ${idx % 2 === 1 ? '' : ''}`} style={{boxShadow: '2px 0 4px -2px rgba(0,0,0,0.06)'}}>
-                                <div className="font-medium text-slate-100 text-sm">{school.displayName}</div>
-                                <div className="text-[11px] text-slate-400">{schoolTypeLabels[school.schoolType]} | ${school.tuition.toLocaleString()}</div>
-                    </td>
-                              <td className="px-2 py-2 text-center">{school.capacity}</td>
-                              <td className="px-2 py-2 text-right text-green-400 font-medium border-l">{fmt(ue.tuition)}</td>
-                              <td className="px-2 py-2 text-right border-l">{fmt(ue.staffingPerStudent)}</td>
-                              <td className="px-2 py-2 text-right text-blue-700">{fmt(ue.facilitiesPerStudent)}</td>
-                              <td className="px-2 py-2 text-right text-slate-600">{fmt(ue.capexPerStudent)}</td>
-                              <td className="px-2 py-2 text-right text-violet-700">{fmt(ue.programsPerStudent)}</td>
-                              <td className="px-2 py-2 text-right text-orange-600">{fmt(ue.miscPerStudent)}</td>
-                              <td className="px-2 py-2 text-right text-rose-600">{fmt(ue.timebackPerStudent)}</td>
-                              {/* Model Margin */}
-                              <td className={`px-2 py-2 text-right border-l ${ueModel.marginPct >= 0 ? 'text-green-400' : 'text-red-400'}`}>
-                                {ueModel.marginPct >= 0 ? '+' : ''}{ueModel.marginPct.toFixed(1)}%
-                    </td>
-                              {/* Actual Margin — answer column */}
-                              <td className={`px-2 py-2 text-right answer-glow font-bold text-base ${ue.marginPct >= 0 ? 'text-green-400' : 'text-red-400'}`}>
-                                {ue.marginPct >= 0 ? '+' : ''}{ue.marginPct.toFixed(1)}%
-                    </td>
-                              {/* Gap */}
-                              <td className={`px-2 py-2 text-right text-sm ${marginGap >= 0 ? 'text-green-400' : 'text-red-400'}`}>
-                                {marginGap >= 0 ? '+' : ''}{marginGap.toFixed(1)}
-                    </td>
-                              {/* Driver */}
-                              <td className="px-2 py-2 text-right text-[11px] text-slate-400">
-                                {Math.abs(facGapPS) > 500 ? (
-                                  <span className={facGapPS > 0 ? 'text-red-500' : 'text-green-500'}>
-                                    Fac {facGapPS > 0 ? '+' : ''}{fmt(facGapPS)}
-                      </span>
-                                ) : '—'}
-                    </td>
-                              <td className="px-2 py-2 text-center border-l">
-                                <span className={`px-2 py-0.5 rounded text-xs font-medium ${hitsTarget ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'}`}>
-                                  {target}%{hitsTarget ? ' ✓' : ' ✗'}
-                  </span>
-                </td>
-              </tr>
+                        {(['alpha-school', 'growth-alpha', 'microschool', 'alternative', 'low-dollar'] as SchoolType[]).map(type => {
+                          const ts = schools.filter(s => s.schoolType === type);
+                          if (ts.length === 0) return null;
+                          const isExp = expandedUE.includes(type);
+                          const tCap = Math.max(ts.reduce((s, sc) => s + sc.capacity, 0), 1);
+                          // Weighted avg UE for type
+                          const tFacTotal = ts.reduce((s, sc) => s + sc.costs.lease.total + sc.costs.fixedFacilities.total + sc.costs.variableFacilities.total + sc.costs.studentServices.total, 0);
+                          const tCapexAnn = ts.reduce((s, sc) => s + sc.costs.annualDepreciation.total, 0);
+                          const tRevenue = ts.reduce((s, sc) => s + sc.tuition * sc.capacity, 0);
+                          const tUe = calculateUnitEconomics(tRevenue / tCap, tCap, tFacTotal, tCapexAnn);
+                          const tModelFac = ts.reduce((s, sc) => s + sc.budget.modelFacPerStudent * sc.capacity, 0);
+                          const tModelCapex = ts.reduce((s, sc) => s + sc.budget.capexBudget / 10, 0);
+                          const tUeModel = calculateUnitEconomics(tRevenue / tCap, tCap, tModelFac, tModelCapex);
+                          const tTarget = Math.round(ts.reduce((s, sc) => s + getTargetPct(sc.tuition) * sc.capacity, 0) / tCap);
+                          const tGap = tUe.marginPct - tUeModel.marginPct;
+                          return (
+                            <React.Fragment key={type}>
+                              <tr className="bg-slate-700/30 cursor-pointer hover:bg-slate-700/50" onClick={() => setExpandedUE(prev => prev.includes(type) ? prev.filter(t => t !== type) : [...prev, type])}>
+                                <td className="px-2 py-2.5 sticky left-0 z-10" style={{boxShadow: '2px 0 4px -2px rgba(0,0,0,0.06)'}}>
+                                  <div className="font-bold text-white text-sm"><span className="text-slate-400 mr-1.5 text-xs">{isExp ? '▼' : '▶'}</span>{schoolTypeLabels[type]} ({ts.length})</div>
+                                </td>
+                                <td className="px-2 py-2.5 text-center font-semibold">{tCap}</td>
+                                <td className="px-2 py-2.5 text-right text-green-400 font-semibold border-l">{fmt(tUe.tuition)}</td>
+                                <td className="px-2 py-2.5 text-right font-semibold border-l">{fmt(tUe.staffingPerStudent)}</td>
+                                <td className="px-2 py-2.5 text-right text-blue-700 font-semibold">{fmt(tUe.facilitiesPerStudent)}</td>
+                                <td className="px-2 py-2.5 text-right text-slate-600 font-semibold">{fmt(tUe.capexPerStudent)}</td>
+                                <td className="px-2 py-2.5 text-right text-violet-700 font-semibold">{fmt(tUe.programsPerStudent)}</td>
+                                <td className="px-2 py-2.5 text-right text-orange-600 font-semibold">{fmt(tUe.miscPerStudent)}</td>
+                                <td className="px-2 py-2.5 text-right text-rose-600 font-semibold">{fmt(tUe.timebackPerStudent)}</td>
+                                <td className={`px-2 py-2.5 text-right font-semibold border-l ${tUeModel.marginPct >= 0 ? 'text-green-400' : 'text-red-400'}`}>{tUeModel.marginPct >= 0 ? '+' : ''}{tUeModel.marginPct.toFixed(1)}%</td>
+                                <td className={`px-2 py-2.5 text-right font-bold text-base ${tUe.marginPct >= 0 ? 'text-green-400' : 'text-red-400'}`}>{tUe.marginPct >= 0 ? '+' : ''}{tUe.marginPct.toFixed(1)}%</td>
+                                <td className={`px-2 py-2.5 text-right font-semibold ${tGap >= 0 ? 'text-green-400' : 'text-red-400'}`}>{tGap >= 0 ? '+' : ''}{tGap.toFixed(1)}</td>
+                                <td className="px-2 py-2.5 text-right text-slate-500">—</td>
+                                <td className="px-2 py-2.5 text-center border-l">
+                                  <span className={`px-2 py-0.5 rounded text-xs font-medium ${tUe.marginPct >= tTarget ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'}`}>{tTarget}%{tUe.marginPct >= tTarget ? ' ✓' : ' ✗'}</span>
+                                </td>
+                              </tr>
+                              {isExp && [...ts].sort((a, b) => {
+                                const ueA = calculateUnitEconomics(a.tuition, a.capacity, a.costs.lease.total + a.costs.fixedFacilities.total + a.costs.variableFacilities.total + a.costs.studentServices.total, a.costs.annualDepreciation.total);
+                                const ueB = calculateUnitEconomics(b.tuition, b.capacity, b.costs.lease.total + b.costs.fixedFacilities.total + b.costs.variableFacilities.total + b.costs.studentServices.total, b.costs.annualDepreciation.total);
+                                return ueA.marginPct - ueB.marginPct;
+                              }).map(school => {
+                                const facTotal = school.costs.lease.total + school.costs.fixedFacilities.total + school.costs.variableFacilities.total + school.costs.studentServices.total;
+                                const ue = calculateUnitEconomics(school.tuition, school.capacity, facTotal, school.costs.annualDepreciation.total);
+                                const modelFacTotal = school.budget.modelFacPerStudent * school.capacity;
+                                const modelCapexAnn = school.budget.capexBudget / 10;
+                                const ueModel = calculateUnitEconomics(school.tuition, school.capacity, modelFacTotal, modelCapexAnn);
+                                const target = getTargetPct(school.tuition);
+                                const hitsTarget = ue.marginPct >= target;
+                                const marginGap = ue.marginPct - ueModel.marginPct;
+                                const facGapPS = ue.facilitiesPerStudent - ueModel.facilitiesPerStudent;
+                                return (
+                                  <tr key={school.id} className="hover:bg-slate-700/40 cursor-pointer bg-slate-800/20" onClick={() => setSelectedSchool(school)}>
+                                    <td className="px-2 py-2 pl-8 sticky left-0 z-10" style={{boxShadow: '2px 0 4px -2px rgba(0,0,0,0.06)'}}>
+                                      <div className="font-medium text-slate-200 text-sm">{school.displayName}</div>
+                                      <div className="text-[11px] text-slate-500">${school.tuition.toLocaleString()}</div>
+                                    </td>
+                                    <td className="px-2 py-2 text-center">{school.capacity}</td>
+                                    <td className="px-2 py-2 text-right text-green-400 font-medium border-l">{fmt(ue.tuition)}</td>
+                                    <td className="px-2 py-2 text-right border-l">{fmt(ue.staffingPerStudent)}</td>
+                                    <td className="px-2 py-2 text-right text-blue-700">{fmt(ue.facilitiesPerStudent)}</td>
+                                    <td className="px-2 py-2 text-right text-slate-600">{fmt(ue.capexPerStudent)}</td>
+                                    <td className="px-2 py-2 text-right text-violet-700">{fmt(ue.programsPerStudent)}</td>
+                                    <td className="px-2 py-2 text-right text-orange-600">{fmt(ue.miscPerStudent)}</td>
+                                    <td className="px-2 py-2 text-right text-rose-600">{fmt(ue.timebackPerStudent)}</td>
+                                    <td className={`px-2 py-2 text-right border-l ${ueModel.marginPct >= 0 ? 'text-green-400' : 'text-red-400'}`}>{ueModel.marginPct >= 0 ? '+' : ''}{ueModel.marginPct.toFixed(1)}%</td>
+                                    <td className={`px-2 py-2 text-right answer-glow font-bold text-base ${ue.marginPct >= 0 ? 'text-green-400' : 'text-red-400'}`}>{ue.marginPct >= 0 ? '+' : ''}{ue.marginPct.toFixed(1)}%</td>
+                                    <td className={`px-2 py-2 text-right text-sm ${marginGap >= 0 ? 'text-green-400' : 'text-red-400'}`}>{marginGap >= 0 ? '+' : ''}{marginGap.toFixed(1)}</td>
+                                    <td className="px-2 py-2 text-right text-[11px] text-slate-400">
+                                      {Math.abs(facGapPS) > 500 ? (<span className={facGapPS > 0 ? 'text-red-500' : 'text-green-500'}>Fac {facGapPS > 0 ? '+' : ''}{fmt(facGapPS)}</span>) : '—'}
+                                    </td>
+                                    <td className="px-2 py-2 text-center border-l">
+                                      <span className={`px-2 py-0.5 rounded text-xs font-medium ${hitsTarget ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'}`}>{target}%{hitsTarget ? ' ✓' : ' ✗'}</span>
+                                    </td>
+                                  </tr>
+                                );
+                              })}
+                            </React.Fragment>
                           );
                         })}
             </tbody>
