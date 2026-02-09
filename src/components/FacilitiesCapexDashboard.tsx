@@ -25,12 +25,10 @@ import {
   getTargetPct,
   schoolTypeLabels,
   tuitionTierLabels,
-  presetLabels,
   type SchoolData,
   type PortfolioSummary,
   type SchoolType,
   type TuitionTier,
-  type ExpensePreset,
   type HealthScore,
 } from '../data/facilitiesCapexData';
 
@@ -71,35 +69,6 @@ const HealthBadge: React.FC<{ score: HealthScore; verdict: string }> = ({ score,
 // EXPENSE PRESET TOGGLE
 // ============================================================================
 
-const PresetToggle: React.FC<{
-  preset: ExpensePreset;
-  onChange: (preset: ExpensePreset) => void;
-}> = ({ preset, onChange }) => {
-  return (
-    <div className="flex items-center gap-2 bg-slate-600/50 rounded-lg p-1">
-      <button
-        className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors ${
-          preset === 'dashboard'
-            ? 'bg-white text-slate-800 shadow-sm'
-            : 'text-slate-300 hover:text-white'
-        }`}
-        onClick={() => onChange('dashboard')}
-      >
-        {presetLabels.dashboard}
-      </button>
-      <button
-        className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors ${
-          preset === 'expense-report'
-            ? 'bg-white text-slate-800 shadow-sm'
-            : 'text-slate-300 hover:text-white'
-        }`}
-        onClick={() => onChange('expense-report')}
-      >
-        {presetLabels['expense-report']}
-      </button>
-    </div>
-  );
-};
 
 // ============================================================================
 // OPERATING STATUS TOGGLE
@@ -391,8 +360,6 @@ const FacilitiesCapexDashboard: React.FC = () => {
   const [tuitionTierFilter, setTuitionTierFilter] = useState<TuitionTier | 'all'>('all');
   const [operatingFilter, setOperatingFilter] = useState<OperatingFilter>('all');
 
-  // Expense preset
-  const [expensePreset, setExpensePreset] = useState<ExpensePreset>('dashboard');
 
   // (Scenario slider removed — was on old segmentation tab)
 
@@ -465,7 +432,6 @@ const FacilitiesCapexDashboard: React.FC = () => {
                 <option value="all">All Tiers</option>
                 {Object.entries(tuitionTierLabels).map(([key, label]) => (<option key={key} value={key}>{label}</option>))}
               </select>
-              <PresetToggle preset={expensePreset} onChange={setExpensePreset} />
           </div>
           </div>
         </div>
