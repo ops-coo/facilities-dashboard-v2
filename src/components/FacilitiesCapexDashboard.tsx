@@ -401,6 +401,8 @@ const FacilitiesCapexDashboard: React.FC = () => {
   const [overviewBasis, setOverviewBasis] = useState<'current' | 'capacity' | 'sqft'>('capacity');
   const [showCharts, setShowCharts] = useState(false);
   const [expandedType, setExpandedType] = useState<SchoolType | null>(null);
+  const [expandedVarianceType, setExpandedVarianceType] = useState<SchoolType | null>(null);
+  const [expandedMarginType, setExpandedMarginType] = useState<SchoolType | null>(null);
 
   // Sort state for each table
   const [overviewSort, setOverviewSort] = useState<{key: string; dir: 'asc'|'desc'}>({key: 'total', dir: 'desc'});
@@ -1133,86 +1135,69 @@ const FacilitiesCapexDashboard: React.FC = () => {
                   </div>
                 </div>
 
-                {/* === CHART: CapEx vs Facilities OpEx Variance (Stacked Bar) === */}
+                {/* === CHART: CapEx vs Facilities OpEx Variance — By Category === */}
                 {(() => {
-                  const varianceData = [...schools].map(school => {
+                  const varTypeOrder: SchoolType[] = ['alpha-school', 'growth-alpha', 'microschool', 'alternative', 'low-dollar'];
+                  const computeSchoolVariance = (school: SchoolData) => {
                     const cap = Math.max(school.capacity, 1);
-                    // Facilities OpEx variance per student
                     const facBudget = school.budget.modelFacPerStudent * cap;
                     const facActual = school.costs.lease.total + school.costs.fixedFacilities.total +
                       school.costs.variableFacilities.total + school.costs.studentServices.total;
-                    const facVariancePS = (facActual - facBudget) / cap;
-                    // CapEx depreciation variance per student
                     const capexBudget = school.budget.capexBudget;
                     const capexActual = school.costs.capexBuildout;
-                    const deprPeriod = school.costs.annualDepreciation.total > 0
-                      ? capexActual / school.costs.annualDepreciation.total
-                      : 10;
+                    const deprPeriod = school.costs.annualDepreciation.total > 0 ? capexActual / school.costs.annualDepreciation.total : 10;
                     const capexBudgetDepr = capexBudget / deprPeriod;
-                    const capexVariancePS = (school.costs.annualDepreciation.total - capexBudgetDepr) / cap;
                     return {
-                      name: school.displayName.length > 18 ? school.displayName.replace('Alpha ', 'A. ') : school.displayName,
-                      facOpEx: Math.round(facVariancePS),
-                      capExDepr: Math.round(capexVariancePS),
+                      facOpEx: Math.round((facActual - facBudget) / cap),
+                      capExDepr: Math.round((school.costs.annualDepreciation.total - capexBudgetDepr) / cap),
                     };
-                  }).sort((a, b) => (b.facOpEx + b.capExDepr) - (a.facOpEx + a.capExDepr));
+                  };
 
-                  // Summary stats
-                  const avgFacVar = varianceData.length > 0
-                    ? varianceData.reduce((s, d) => s + d.facOpEx, 0) / varianceData.length
-                    : 0;
-                  const avgCapVar = varianceData.length > 0
-                    ? varianceData.reduce((s, d) => s + d.capExDepr, 0) / varianceData.length
-                    : 0;
+                  // Type-level summary
+                  const varianceTypeData = varTypeOrder.map(type => {
+                    const ts = schools.filter(s => s.schoolType === type);
+                    if (ts.length === 0) return null;
+                    const totalCap = Math.max(ts.reduce((s, sc) => s + sc.capacity, 0), 1);
+                    const totals = ts.reduce((acc, sc) => {
+                      const v = computeSchoolVariance(sc);
+                      return { facOpEx: acc.facOpEx + v.facOpEx * Math.max(sc.capacity, 1), capExDepr: acc.capExDepr + v.capExDepr * Math.max(sc.capacity, 1) };
+                    }, { facOpEx: 0, capExDepr: 0 });
+                    return {
+                      name: `${schoolTypeLabels[type]} (${ts.length})`,
+                      type,
+                      facOpEx: Math.round(totals.facOpEx / totalCap),
+                      capExDepr: Math.round(totals.capExDepr / totalCap),
+                      count: ts.length,
+                    };
+                  }).filter((d): d is NonNullable<typeof d> => d !== null);
+
+                  // Expanded school data
+                  const expandedVarSchools = expandedVarianceType ? schools
+                    .filter(s => s.schoolType === expandedVarianceType)
+                    .map(s => {
+                      const v = computeSchoolVariance(s);
+                      return {
+                        name: s.displayName.length > 16 ? s.displayName.replace('Alpha ', 'A. ') : s.displayName,
+                        ...v,
+                        school: s,
+                      };
+                    }).sort((a, b) => (b.facOpEx + b.capExDepr) - (a.facOpEx + a.capExDepr))
+                  : [];
 
                   return (
                     <div className="table-card rounded-xl overflow-hidden">
                       <div className="px-5 py-3 bg-slate-800 text-white">
-                        <div className="flex items-center justify-between">
-                          <div>
-                            <h3 className="font-semibold">Variance Source: Facilities OpEx vs CapEx Depreciation</h3>
-                            <p className="text-xs text-slate-300 mt-0.5">
-                              Per-student budget variance. CapEx depreciation is generally controlled — facilities operating expenses drive the overrun.
-                            </p>
-                          </div>
-                          <div className="flex gap-4 text-right">
-                            <div>
-                              <div className="text-xs text-slate-400">Avg OpEx Var.</div>
-                              <div className={`text-sm font-bold ${avgFacVar > 0 ? 'text-red-400' : 'text-green-400'}`}>
-                                {avgFacVar > 0 ? '+' : ''}${Math.abs(Math.round(avgFacVar)).toLocaleString()}
-                              </div>
-                            </div>
-                            <div>
-                              <div className="text-xs text-slate-400">Avg CapEx Var.</div>
-                              <div className={`text-sm font-bold ${avgCapVar > 0 ? 'text-red-400' : 'text-green-400'}`}>
-                                {avgCapVar > 0 ? '+' : avgCapVar < 0 ? '-' : ''}${Math.abs(Math.round(avgCapVar)).toLocaleString()}
-                              </div>
-                            </div>
-                          </div>
-                        </div>
+                        <h3 className="font-semibold">Variance Source: Facilities OpEx vs CapEx Depreciation</h3>
+                        <p className="text-xs text-slate-300 mt-0.5">
+                          Per-student budget variance by school type. <span className="text-blue-400">Click a category to see individual schools.</span>
+                        </p>
                       </div>
-                      <div className="p-4" style={{ height: Math.max(420, varianceData.length * 28 + 60) }}>
+                      <div className="p-4" style={{ height: varianceTypeData.length * 50 + 60 }}>
                         <ResponsiveContainer width="100%" height="100%">
-                          <BarChart
-                            data={varianceData}
-                            layout="vertical"
-                            margin={{ left: 140, right: 40, top: 5, bottom: 5 }}
-                            stackOffset="sign"
-                          >
+                          <BarChart data={varianceTypeData} layout="vertical" margin={{ left: 170, right: 40, top: 5, bottom: 5 }} stackOffset="sign">
                             <CartesianGrid strokeDasharray="3 3" stroke="#334155" horizontal={false} />
-                            <XAxis
-                              type="number"
-                              tickFormatter={(v: number) => `$${v >= 0 ? '' : '-'}${Math.abs(v / 1000).toFixed(0)}K`}
-                              stroke="#94a3b8"
-                              fontSize={11}
-                            />
-                            <YAxis
-                              type="category"
-                              dataKey="name"
-                              width={130}
-                              tick={{ fill: '#cbd5e1', fontSize: 11 }}
-                              tickLine={false}
-                            />
+                            <XAxis type="number" tickFormatter={(v: number) => `${v >= 0 ? '+' : ''}$${v.toLocaleString()}`} stroke="#94a3b8" fontSize={11} />
+                            <YAxis type="category" dataKey="name" width={160} tick={{ fill: '#e2e8f0', fontSize: 12, fontWeight: 600 }} tickLine={false} />
                             <Tooltip
                               formatter={(v: number, name: string) => [`${v >= 0 ? '+' : ''}$${v.toLocaleString()}/student`, name]}
                               contentStyle={{ backgroundColor: '#1e293b', border: '1px solid #475569', borderRadius: 8, fontSize: 12 }}
@@ -1220,33 +1205,51 @@ const FacilitiesCapexDashboard: React.FC = () => {
                             />
                             <Legend wrapperStyle={{ fontSize: 12, color: '#94a3b8', paddingTop: 8 }} />
                             <ReferenceLine x={0} stroke="#94a3b8" strokeWidth={2} />
-                            <Bar
-                              dataKey="facOpEx"
-                              name="Facilities OpEx Variance"
-                              stackId="variance"
-                              fill="#ef4444"
-                              barSize={14}
-                              radius={[0, 3, 3, 0]}
+                            <Bar dataKey="facOpEx" name="Facilities OpEx Variance" stackId="v" fill="#ef4444" barSize={14} radius={[0, 3, 3, 0]}
+                              onClick={(_d: any, idx: number) => { const e = varianceTypeData[idx]; if (e) setExpandedVarianceType(expandedVarianceType === e.type ? null : e.type); }}
+                              style={{ cursor: 'pointer' }}
                             />
-                            <Bar
-                              dataKey="capExDepr"
-                              name="CapEx Depr. Variance"
-                              stackId="variance"
-                              fill="#64748b"
-                              barSize={14}
-                              radius={[0, 3, 3, 0]}
+                            <Bar dataKey="capExDepr" name="CapEx Depr. Variance" stackId="v" fill="#64748b" barSize={14} radius={[0, 3, 3, 0]}
+                              onClick={(_d: any, idx: number) => { const e = varianceTypeData[idx]; if (e) setExpandedVarianceType(expandedVarianceType === e.type ? null : e.type); }}
+                              style={{ cursor: 'pointer' }}
                             />
                           </BarChart>
                         </ResponsiveContainer>
                       </div>
-                      <div className="px-5 pb-4">
-                        <div className="bg-slate-800/60 border border-slate-700 rounded-lg p-3 text-xs text-slate-300">
-                          <span className="font-semibold text-white">Key insight:</span>{' '}
-                          CapEx depreciation variance (gray) is minimal for most schools — the buildout budgets are roughly on target.
-                          The red bars (Facilities OpEx) tell the real story: operating costs like food services, security, transportation,
-                          and maintenance consistently exceed the approved model, especially at low-utilization schools.
+                      {expandedVarianceType && expandedVarSchools.length > 0 && (
+                        <div className="border-t border-slate-700">
+                          <div className="px-5 py-3 bg-blue-900/20 border-b border-blue-800/30 flex items-center justify-between">
+                            <div>
+                              <h4 className="font-semibold text-blue-300 text-sm">{schoolTypeLabels[expandedVarianceType]} — School Detail</h4>
+                              <p className="text-[11px] text-slate-400">Click a bar to open full school profile.</p>
+                            </div>
+                            <button onClick={() => setExpandedVarianceType(null)} className="text-slate-400 hover:text-white text-lg leading-none px-2 py-1 rounded hover:bg-slate-700">x</button>
+                          </div>
+                          <div className="p-4" style={{ height: Math.max(180, expandedVarSchools.length * 36 + 40) }}>
+                            <ResponsiveContainer width="100%" height="100%">
+                              <BarChart data={expandedVarSchools} layout="vertical" margin={{ left: 170, right: 40, top: 5, bottom: 5 }} stackOffset="sign">
+                                <CartesianGrid strokeDasharray="3 3" stroke="#334155" horizontal={false} />
+                                <XAxis type="number" tickFormatter={(v: number) => `${v >= 0 ? '+' : ''}$${v.toLocaleString()}`} stroke="#94a3b8" fontSize={11} />
+                                <YAxis type="category" dataKey="name" width={160} tick={{ fill: '#cbd5e1', fontSize: 11 }} tickLine={false} />
+                                <Tooltip
+                                  formatter={(v: number, name: string) => [`${v >= 0 ? '+' : ''}$${v.toLocaleString()}/student`, name]}
+                                  contentStyle={{ backgroundColor: '#1e293b', border: '1px solid #475569', borderRadius: 8, fontSize: 12 }}
+                                  labelStyle={{ color: '#e2e8f0', fontWeight: 600 }}
+                                />
+                                <ReferenceLine x={0} stroke="#94a3b8" strokeWidth={1.5} />
+                                <Bar dataKey="facOpEx" name="Facilities OpEx" stackId="v" fill="#ef4444" barSize={12}
+                                  onClick={(_d: any, idx: number) => { const s = expandedVarSchools[idx]?.school; if (s) setSelectedSchool(s); }}
+                                  style={{ cursor: 'pointer' }}
+                                />
+                                <Bar dataKey="capExDepr" name="CapEx Depr." stackId="v" fill="#64748b" barSize={12}
+                                  onClick={(_d: any, idx: number) => { const s = expandedVarSchools[idx]?.school; if (s) setSelectedSchool(s); }}
+                                  style={{ cursor: 'pointer' }}
+                                />
+                              </BarChart>
+                            </ResponsiveContainer>
+                          </div>
                         </div>
-                      </div>
+                      )}
                     </div>
                   );
                 })()}
@@ -1457,49 +1460,66 @@ const FacilitiesCapexDashboard: React.FC = () => {
                   </div>
       </div>
 
-                {/* === CHART: Model vs Actual Margin Horizontal Bar === */}
+                {/* === CHART: Model vs Actual Margin — By Category === */}
                 {(() => {
-                  const marginData = [...schools].map(school => {
+                  const mTypeOrder: SchoolType[] = ['alpha-school', 'growth-alpha', 'microschool', 'alternative', 'low-dollar'];
+                  const computeMargins = (school: SchoolData) => {
                     const facTotal = school.costs.lease.total + school.costs.fixedFacilities.total +
                       school.costs.variableFacilities.total + school.costs.studentServices.total;
                     const ue = calculateUnitEconomics(school.tuition, school.capacity, facTotal, school.costs.annualDepreciation.total);
                     const modelFacTotal = school.budget.modelFacPerStudent * school.capacity;
                     const modelCapexAnn = school.budget.capexBudget / 10;
                     const ueModel = calculateUnitEconomics(school.tuition, school.capacity, modelFacTotal, modelCapexAnn);
+                    return { model: ueModel.marginPct, actual: ue.marginPct, target: getTargetPct(school.tuition) };
+                  };
+
+                  // Type-level summary (capacity-weighted avg margins)
+                  const marginTypeData = mTypeOrder.map(type => {
+                    const ts = schools.filter(s => s.schoolType === type);
+                    if (ts.length === 0) return null;
+                    const totalCap = Math.max(ts.reduce((s, sc) => s + sc.capacity, 0), 1);
+                    const wModel = ts.reduce((s, sc) => { const m = computeMargins(sc); return s + m.model * sc.capacity; }, 0) / totalCap;
+                    const wActual = ts.reduce((s, sc) => { const m = computeMargins(sc); return s + m.actual * sc.capacity; }, 0) / totalCap;
+                    const wTarget = Math.round(ts.reduce((s, sc) => s + getTargetPct(sc.tuition) * sc.capacity, 0) / totalCap);
                     return {
-                      name: school.displayName.length > 18 ? school.displayName.replace('Alpha ', 'A. ') : school.displayName,
-                      model: parseFloat(ueModel.marginPct.toFixed(1)),
-                      actual: parseFloat(ue.marginPct.toFixed(1)),
-                      target: getTargetPct(school.tuition),
+                      name: `${schoolTypeLabels[type]} (${ts.length})`,
+                      type,
+                      model: parseFloat(wModel.toFixed(1)),
+                      actual: parseFloat(wActual.toFixed(1)),
+                      target: wTarget,
+                      count: ts.length,
                     };
-                  }).sort((a, b) => a.actual - b.actual);
+                  }).filter((d): d is NonNullable<typeof d> => d !== null);
+
+                  // Expanded school data
+                  const expandedMarginSchools = expandedMarginType ? schools
+                    .filter(s => s.schoolType === expandedMarginType)
+                    .map(s => {
+                      const m = computeMargins(s);
+                      return {
+                        name: s.displayName.length > 16 ? s.displayName.replace('Alpha ', 'A. ') : s.displayName,
+                        model: parseFloat(m.model.toFixed(1)),
+                        actual: parseFloat(m.actual.toFixed(1)),
+                        target: m.target,
+                        school: s,
+                      };
+                    }).sort((a, b) => a.actual - b.actual)
+                  : [];
 
                   return (
                     <div className="table-card rounded-xl overflow-hidden">
                       <div className="px-5 py-3 bg-slate-800 text-white">
                         <h3 className="font-semibold">Model vs Actual Margin (at Capacity)</h3>
                         <p className="text-xs text-slate-300 mt-0.5">
-                          Blue = model margin %. Colored bar = actual margin % (green = at target, amber = positive but below target, red = negative). Sorted worst → best.
+                          Weighted avg by school type. Blue = model margin %. Colored = actual (green/amber/red by target). <span className="text-blue-400">Click to drill in.</span>
                         </p>
                       </div>
-                      <div className="p-4" style={{ height: Math.max(420, marginData.length * 30 + 60) }}>
+                      <div className="p-4" style={{ height: marginTypeData.length * 50 + 60 }}>
                         <ResponsiveContainer width="100%" height="100%">
-                          <BarChart data={marginData} layout="vertical" margin={{ left: 140, right: 40, top: 5, bottom: 5 }}>
+                          <BarChart data={marginTypeData} layout="vertical" margin={{ left: 170, right: 40, top: 5, bottom: 5 }}>
                             <CartesianGrid strokeDasharray="3 3" stroke="#334155" horizontal={false} />
-                            <XAxis
-                              type="number"
-                              tickFormatter={(v: number) => `${v}%`}
-                              stroke="#94a3b8"
-                              fontSize={11}
-                              domain={['auto', 'auto']}
-                            />
-                            <YAxis
-                              type="category"
-                              dataKey="name"
-                              width={130}
-                              tick={{ fill: '#cbd5e1', fontSize: 11 }}
-                              tickLine={false}
-                            />
+                            <XAxis type="number" tickFormatter={(v: number) => `${v}%`} stroke="#94a3b8" fontSize={11} domain={['auto', 'auto']} />
+                            <YAxis type="category" dataKey="name" width={160} tick={{ fill: '#e2e8f0', fontSize: 12, fontWeight: 600 }} tickLine={false} />
                             <Tooltip
                               formatter={(v: number, name: string) => [`${v.toFixed(1)}%`, name]}
                               contentStyle={{ backgroundColor: '#1e293b', border: '1px solid #475569', borderRadius: 8, fontSize: 12 }}
@@ -1507,18 +1527,59 @@ const FacilitiesCapexDashboard: React.FC = () => {
                             />
                             <Legend wrapperStyle={{ fontSize: 12, color: '#94a3b8', paddingTop: 8 }} />
                             <ReferenceLine x={0} stroke="#64748b" strokeWidth={1.5} />
-                            <Bar dataKey="model" name="Model Margin %" fill="#3b82f6" barSize={9} radius={[0, 3, 3, 0]} />
-                            <Bar dataKey="actual" name="Actual Margin %" barSize={9} radius={[0, 3, 3, 0]}>
-                              {marginData.map((entry, idx) => (
-                                <Cell
-                                  key={idx}
-                                  fill={entry.actual >= entry.target ? '#22c55e' : entry.actual >= 0 ? '#f59e0b' : '#ef4444'}
-                                />
+                            <Bar dataKey="model" name="Model Margin %" fill="#3b82f6" barSize={14} radius={[0, 3, 3, 0]}
+                              onClick={(_d: any, idx: number) => { const e = marginTypeData[idx]; if (e) setExpandedMarginType(expandedMarginType === e.type ? null : e.type); }}
+                              style={{ cursor: 'pointer' }}
+                            />
+                            <Bar dataKey="actual" name="Actual Margin %" barSize={14} radius={[0, 3, 3, 0]}
+                              onClick={(_d: any, idx: number) => { const e = marginTypeData[idx]; if (e) setExpandedMarginType(expandedMarginType === e.type ? null : e.type); }}
+                              style={{ cursor: 'pointer' }}
+                            >
+                              {marginTypeData.map((entry, idx) => (
+                                <Cell key={idx} fill={entry.actual >= entry.target ? '#22c55e' : entry.actual >= 0 ? '#f59e0b' : '#ef4444'} />
                               ))}
                             </Bar>
                           </BarChart>
                         </ResponsiveContainer>
                       </div>
+                      {expandedMarginType && expandedMarginSchools.length > 0 && (
+                        <div className="border-t border-slate-700">
+                          <div className="px-5 py-3 bg-blue-900/20 border-b border-blue-800/30 flex items-center justify-between">
+                            <div>
+                              <h4 className="font-semibold text-blue-300 text-sm">{schoolTypeLabels[expandedMarginType]} — School Detail</h4>
+                              <p className="text-[11px] text-slate-400">Click a bar to open full school profile.</p>
+                            </div>
+                            <button onClick={() => setExpandedMarginType(null)} className="text-slate-400 hover:text-white text-lg leading-none px-2 py-1 rounded hover:bg-slate-700">x</button>
+                          </div>
+                          <div className="p-4" style={{ height: Math.max(180, expandedMarginSchools.length * 36 + 40) }}>
+                            <ResponsiveContainer width="100%" height="100%">
+                              <BarChart data={expandedMarginSchools} layout="vertical" margin={{ left: 170, right: 40, top: 5, bottom: 5 }}>
+                                <CartesianGrid strokeDasharray="3 3" stroke="#334155" horizontal={false} />
+                                <XAxis type="number" tickFormatter={(v: number) => `${v}%`} stroke="#94a3b8" fontSize={11} domain={['auto', 'auto']} />
+                                <YAxis type="category" dataKey="name" width={160} tick={{ fill: '#cbd5e1', fontSize: 11 }} tickLine={false} />
+                                <Tooltip
+                                  formatter={(v: number, name: string) => [`${v.toFixed(1)}%`, name]}
+                                  contentStyle={{ backgroundColor: '#1e293b', border: '1px solid #475569', borderRadius: 8, fontSize: 12 }}
+                                  labelStyle={{ color: '#e2e8f0', fontWeight: 600 }}
+                                />
+                                <ReferenceLine x={0} stroke="#64748b" strokeWidth={1.5} />
+                                <Bar dataKey="model" name="Model Margin %" fill="#3b82f6" barSize={12} radius={[0, 3, 3, 0]}
+                                  onClick={(_d: any, idx: number) => { const s = expandedMarginSchools[idx]?.school; if (s) setSelectedSchool(s); }}
+                                  style={{ cursor: 'pointer' }}
+                                />
+                                <Bar dataKey="actual" name="Actual Margin %" barSize={12} radius={[0, 3, 3, 0]}
+                                  onClick={(_d: any, idx: number) => { const s = expandedMarginSchools[idx]?.school; if (s) setSelectedSchool(s); }}
+                                  style={{ cursor: 'pointer' }}
+                                >
+                                  {expandedMarginSchools.map((entry, idx) => (
+                                    <Cell key={idx} fill={entry.actual >= entry.target ? '#22c55e' : entry.actual >= 0 ? '#f59e0b' : '#ef4444'} />
+                                  ))}
+                                </Bar>
+                              </BarChart>
+                            </ResponsiveContainer>
+                          </div>
+                        </div>
+                      )}
                     </div>
                   );
                 })()}
