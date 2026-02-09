@@ -839,6 +839,30 @@ const FacilitiesCapexDashboard: React.FC = () => {
                         </BarChart>
                       </ResponsiveContainer>
                     </div>
+                    {/* Per Student at Capacity breakdown */}
+                    <div className="px-5 pb-4 border-t border-slate-700/50 pt-3">
+                      <div className="text-[10px] text-slate-500 font-medium uppercase tracking-wide mb-2">Per Student at Capacity ({summary.totalCapacity} seats)</div>
+                      <div className="space-y-1">
+                        {subcategoryData.map(d => {
+                          const perStudent = Math.round(d.value / Math.max(summary.totalCapacity, 1));
+                          const pctOfTotal = summary.grandTotal > 0 ? (d.value / summary.grandTotal * 100) : 0;
+                          return (
+                            <div key={d.name} className="flex items-center gap-2 text-xs">
+                              <div className="w-2.5 h-2.5 rounded flex-shrink-0" style={{ backgroundColor: d.color }} />
+                              <span className="text-slate-300 flex-1">{d.name}</span>
+                              <span className="font-semibold text-white min-w-[60px] text-right">${perStudent.toLocaleString()}</span>
+                              <span className="text-slate-500 min-w-[35px] text-right">{pctOfTotal.toFixed(0)}%</span>
+                            </div>
+                          );
+                        })}
+                        <div className="flex items-center gap-2 text-xs border-t border-slate-700/50 pt-1 mt-1">
+                          <div className="w-2.5 h-2.5 flex-shrink-0" />
+                          <span className="text-white font-semibold flex-1">Total</span>
+                          <span className="font-bold text-white min-w-[60px] text-right">${Math.round(summary.grandTotal / Math.max(summary.totalCapacity, 1)).toLocaleString()}</span>
+                          <span className="text-slate-500 min-w-[35px] text-right">100%</span>
+                        </div>
+                      </div>
+                    </div>
                   </div>
 
                   {/* Cost/Sq Ft — Chart + Comps Table */}
