@@ -403,6 +403,7 @@ const FacilitiesCapexDashboard: React.FC = () => {
   const [expandedType, setExpandedType] = useState<SchoolType | null>(null);
   const [expandedVarianceType, setExpandedVarianceType] = useState<SchoolType | null>(null);
   const [expandedMarginType, setExpandedMarginType] = useState<SchoolType | null>(null);
+  const [expandedTier, setExpandedTier] = useState<TuitionTier | null>(null);
 
   // Sort state for each table
   const [overviewSort, setOverviewSort] = useState<{key: string; dir: 'asc'|'desc'}>({key: 'total', dir: 'desc'});
@@ -1584,88 +1585,145 @@ const FacilitiesCapexDashboard: React.FC = () => {
                   );
                 })()}
 
-                {/* === CHART: Traffic Light Matrix — Target Achievability by Tuition Tier === */}
+                {/* === Target Achievability by Tuition Tier === */}
                 {(() => {
                   const tiers: TuitionTier[] = ['premium', 'standard', 'value', 'economy'];
-                  const schoolsByTier = tiers.map(tier => ({
-                    tier,
-                    label: tuitionTierLabels[tier],
-                    items: schools.filter(s => s.tuitionTier === tier).map(school => {
-                      const facTotal = school.costs.lease.total + school.costs.fixedFacilities.total +
-                        school.costs.variableFacilities.total + school.costs.studentServices.total;
-                      const ueAtCap = calculateUnitEconomics(school.tuition, school.capacity, facTotal, school.costs.annualDepreciation.total);
-                      const target = getTargetPct(school.tuition);
-                      const canReach = ueAtCap.marginPct >= target;
-                      const isPositive = ueAtCap.marginPct >= 0;
-                      return { school, marginAtCap: ueAtCap.marginPct, target, canReach, isPositive };
-                    }).sort((a, b) => b.marginAtCap - a.marginAtCap),
-                  })).filter(t => t.items.length > 0);
+                  const tierData = tiers.map(tier => {
+                    const ts = schools.filter(s => s.tuitionTier === tier);
+                    if (ts.length === 0) return null;
+                    const totalCap = Math.max(ts.reduce((s, sc) => s + sc.capacity, 0), 1);
+                    const wMargin = ts.reduce((s, sc) => {
+                      const facTotal = sc.costs.lease.total + sc.costs.fixedFacilities.total +
+                        sc.costs.variableFacilities.total + sc.costs.studentServices.total;
+                      const ue = calculateUnitEconomics(sc.tuition, sc.capacity, facTotal, sc.costs.annualDepreciation.total);
+                      return s + ue.marginPct * sc.capacity;
+                    }, 0) / totalCap;
+                    const target = getTargetPct(ts[0].tuition);
+                    const passCount = ts.filter(sc => {
+                      const facTotal = sc.costs.lease.total + sc.costs.fixedFacilities.total +
+                        sc.costs.variableFacilities.total + sc.costs.studentServices.total;
+                      const ue = calculateUnitEconomics(sc.tuition, sc.capacity, facTotal, sc.costs.annualDepreciation.total);
+                      return ue.marginPct >= getTargetPct(sc.tuition);
+                    }).length;
+                    return { tier, label: tuitionTierLabels[tier], avgMargin: parseFloat(wMargin.toFixed(1)), target, passCount, total: ts.length, totalCap };
+                  }).filter((d): d is NonNullable<typeof d> => d !== null);
 
-                  const totalCan = schoolsByTier.reduce((s, t) => s + t.items.filter(x => x.canReach).length, 0);
-                  const totalAll = schoolsByTier.reduce((s, t) => s + t.items.length, 0);
+                  const totalCan = tierData.reduce((s, t) => s + t.passCount, 0);
+                  const totalAll = tierData.reduce((s, t) => s + t.total, 0);
+
+                  // Expanded tier schools
+                  const expandedTierSchools = expandedTier ? schools
+                    .filter(s => s.tuitionTier === expandedTier)
+                    .map(s => {
+                      const facTotal = s.costs.lease.total + s.costs.fixedFacilities.total +
+                        s.costs.variableFacilities.total + s.costs.studentServices.total;
+                      const ue = calculateUnitEconomics(s.tuition, s.capacity, facTotal, s.costs.annualDepreciation.total);
+                      return { school: s, margin: ue.marginPct, target: getTargetPct(s.tuition) };
+                    }).sort((a, b) => b.margin - a.margin)
+                  : [];
 
                   return (
                     <div className="table-card rounded-xl overflow-hidden">
                       <div className="px-5 py-3 bg-slate-800 text-white flex items-center justify-between">
                         <div>
                           <h3 className="font-semibold">Target Achievability by Tuition Tier</h3>
-                          <p className="text-xs text-slate-300 mt-0.5">Can each school reach its tier-specific margin target at full capacity?</p>
+                          <p className="text-xs text-slate-300 mt-0.5">Weighted avg margin at capacity vs tier target. <span className="text-blue-400">Click a row to see schools.</span></p>
                         </div>
                         <div className="text-right">
                           <div className="text-lg font-bold text-white">{totalCan}<span className="text-slate-400 font-normal">/{totalAll}</span></div>
                           <div className="text-[10px] text-slate-400 uppercase tracking-wide">at target</div>
                         </div>
                       </div>
-                      <div className="p-5 space-y-5">
-                        {schoolsByTier.map(t => (
-                          <div key={t.tier}>
-                            <div className="flex items-center gap-2 mb-2">
-                              <span className="text-sm font-semibold text-white">{t.label}</span>
-                              <span className="text-xs text-slate-400">Target: {t.items[0]?.target}% margin</span>
-                              <span className="text-xs text-slate-500 ml-auto">
-                                {t.items.filter(s => s.canReach).length}/{t.items.length} pass
-                              </span>
-                            </div>
-                            <div className="flex flex-wrap gap-2">
-                              {t.items.map(s => (
-                                <div
-                                  key={s.school.id}
-                                  className={`px-3 py-2 rounded-lg border cursor-pointer transition-all hover:scale-105 min-w-[130px] ${
-                                    s.canReach
-                                      ? 'bg-green-900/40 border-green-600 text-green-300'
-                                      : s.isPositive
-                                        ? 'bg-amber-900/40 border-amber-600 text-amber-300'
-                                        : 'bg-red-900/40 border-red-600 text-red-300'
-                                  }`}
-                                  onClick={() => setSelectedSchool(s.school)}
-                                  title={`${s.school.displayName}: ${s.marginAtCap.toFixed(1)}% margin at capacity (target: ${s.target}%)`}
+                      <div className="overflow-x-auto">
+                        <table className="w-full text-sm">
+                          <thead>
+                            <tr className="border-b border-slate-700">
+                              <th className="px-4 py-2.5 text-left text-xs font-medium text-slate-400">Tuition Tier</th>
+                              <th className="px-4 py-2.5 text-center text-xs font-medium text-slate-400">Schools</th>
+                              <th className="px-4 py-2.5 text-center text-xs font-medium text-slate-400">Seats</th>
+                              <th className="px-4 py-2.5 text-right text-xs font-medium text-slate-400">Target</th>
+                              <th className="px-4 py-2.5 text-right text-xs font-medium text-slate-400">Avg Margin</th>
+                              <th className="px-4 py-2.5 text-xs font-medium text-slate-400" style={{ width: '30%' }}>vs Target</th>
+                              <th className="px-4 py-2.5 text-center text-xs font-medium text-slate-400">Pass Rate</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {tierData.map(t => {
+                              const isExpanded = expandedTier === t.tier;
+                              const gap = t.avgMargin - t.target;
+                              const barWidth = Math.min(Math.abs(t.avgMargin) / 30 * 100, 100);
+                              return (
+                                <tr key={t.tier}
+                                  className={`border-b border-slate-700/50 cursor-pointer transition-colors ${isExpanded ? 'bg-blue-900/20' : 'hover:bg-slate-800/50'}`}
+                                  onClick={() => setExpandedTier(isExpanded ? null : t.tier)}
                                 >
-                                  <div className="text-xs font-medium truncate">
-                                    {s.school.displayName.length > 18 ? s.school.displayName.replace('Alpha ', 'A. ') : s.school.displayName}
-                                  </div>
-                                  <div className="flex items-center justify-between mt-1">
-                                    <span className="text-sm font-bold">
-                                      {s.marginAtCap >= 0 ? '+' : ''}{s.marginAtCap.toFixed(1)}%
+                                  <td className="px-4 py-3">
+                                    <div className="font-semibold text-white text-sm">{t.label}</div>
+                                  </td>
+                                  <td className="px-4 py-3 text-center text-slate-300">{t.total}</td>
+                                  <td className="px-4 py-3 text-center text-slate-300">{t.totalCap}</td>
+                                  <td className="px-4 py-3 text-right">
+                                    <span className="px-2 py-0.5 rounded text-xs bg-blue-900/40 text-blue-300">{t.target}%</span>
+                                  </td>
+                                  <td className={`px-4 py-3 text-right font-bold text-base ${t.avgMargin >= t.target ? 'text-green-400' : t.avgMargin >= 0 ? 'text-amber-400' : 'text-red-400'}`}>
+                                    {t.avgMargin >= 0 ? '+' : ''}{t.avgMargin}%
+                                  </td>
+                                  <td className="px-4 py-3">
+                                    <div className="flex items-center gap-2">
+                                      <div className="flex-1 h-3 bg-slate-700 rounded-full overflow-hidden relative">
+                                        <div
+                                          className={`h-full rounded-full ${t.avgMargin >= t.target ? 'bg-green-500' : t.avgMargin >= 0 ? 'bg-amber-500' : 'bg-red-500'}`}
+                                          style={{ width: `${barWidth}%` }}
+                                        />
+                                      </div>
+                                      <span className={`text-xs font-medium min-w-[40px] text-right ${gap >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                                        {gap >= 0 ? '+' : ''}{gap.toFixed(0)}pp
+                                      </span>
+                                    </div>
+                                  </td>
+                                  <td className="px-4 py-3 text-center">
+                                    <span className={`font-bold ${t.passCount === t.total ? 'text-green-400' : t.passCount > 0 ? 'text-amber-400' : 'text-red-400'}`}>
+                                      {t.passCount}/{t.total}
                                     </span>
-                                    <span className="text-[10px] opacity-60">/ {s.target}%</span>
-                                  </div>
-                                </div>
-                              ))}
+                                  </td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                        </table>
+                      </div>
+                      {/* Expanded tier detail */}
+                      {expandedTier && expandedTierSchools.length > 0 && (
+                        <div className="border-t border-slate-700">
+                          <div className="px-5 py-3 bg-blue-900/20 border-b border-blue-800/30 flex items-center justify-between">
+                            <div>
+                              <h4 className="font-semibold text-blue-300 text-sm">{tuitionTierLabels[expandedTier]} — Schools</h4>
+                              <p className="text-[11px] text-slate-400">Click a school to open full profile.</p>
                             </div>
+                            <button onClick={() => setExpandedTier(null)} className="text-slate-400 hover:text-white text-lg leading-none px-2 py-1 rounded hover:bg-slate-700">x</button>
                           </div>
-                        ))}
-                        <div className="flex gap-5 pt-3 border-t border-slate-700 text-xs text-slate-400">
-                          <div className="flex items-center gap-1.5">
-                            <div className="w-3 h-3 rounded bg-green-600" /> At or above target
-                          </div>
-                          <div className="flex items-center gap-1.5">
-                            <div className="w-3 h-3 rounded bg-amber-600" /> Positive margin, below target
-                          </div>
-                          <div className="flex items-center gap-1.5">
-                            <div className="w-3 h-3 rounded bg-red-600" /> Negative margin at capacity
+                          <div className="px-5 py-3 space-y-1.5">
+                            {expandedTierSchools.map(s => {
+                              const atTarget = s.margin >= s.target;
+                              const isPos = s.margin >= 0;
+                              return (
+                                <div key={s.school.id}
+                                  className="flex items-center gap-3 px-3 py-2 rounded-lg hover:bg-slate-800/60 cursor-pointer transition-colors"
+                                  onClick={() => setSelectedSchool(s.school)}
+                                >
+                                  <div className={`w-2.5 h-2.5 rounded-full flex-shrink-0 ${atTarget ? 'bg-green-500' : isPos ? 'bg-amber-500' : 'bg-red-500'}`} />
+                                  <div className="flex-1 text-sm text-slate-200 font-medium">{s.school.displayName}</div>
+                                  <div className="text-xs text-slate-400">{s.school.capacity} seats</div>
+                                  <div className={`text-sm font-bold min-w-[60px] text-right ${atTarget ? 'text-green-400' : isPos ? 'text-amber-400' : 'text-red-400'}`}>
+                                    {s.margin >= 0 ? '+' : ''}{s.margin.toFixed(1)}%
+                                  </div>
+                                  <div className="text-[10px] text-slate-500 min-w-[30px] text-right">/ {s.target}%</div>
+                                </div>
+                              );
+                            })}
                           </div>
                         </div>
-                      </div>
+                      )}
                     </div>
                   );
                 })()}
