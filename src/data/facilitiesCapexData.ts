@@ -1218,7 +1218,7 @@ export function buildSchoolData(): SchoolData[] {
     } else if (pctAt100Capacity > schoolTargetPct * 1.5) {
       // Even at full capacity, costs exceed 1.5× the tuition-tier target — structural problem
       healthScore = 'red';
-      healthVerdict = 'Renegotiate';
+      healthVerdict = 'At Risk';
     } else if (utilizationRate >= 0.7 && pctOfTuitionCurrent <= schoolTargetPct) {
       healthScore = 'green';
       healthVerdict = 'Keeper';

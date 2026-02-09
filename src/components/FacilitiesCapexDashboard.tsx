@@ -17,6 +17,7 @@ import React, { useState, useMemo } from 'react';
 import {
   PieChart, Pie, Cell, Tooltip, ResponsiveContainer,
   BarChart, Bar, XAxis, YAxis, CartesianGrid, ReferenceLine, Legend,
+  ScatterChart, Scatter, ZAxis,
 } from 'recharts';
 import {
   buildSchoolData,
@@ -397,7 +398,7 @@ const FacilitiesCapexDashboard: React.FC = () => {
   // (Scenario slider removed — was on old segmentation tab)
 
   // View mode
-  const [activeTab, setActiveTab] = useState<'overview' | 'segmentation' | 'breakeven' | 'capex-budget'>('overview');
+  const [activeTab, setActiveTab] = useState<'summary' | 'overview' | 'segmentation' | 'breakeven'>('summary');
   const [overviewBasis, setOverviewBasis] = useState<'current' | 'capacity' | 'sqft'>('capacity');
   const [showCharts, setShowCharts] = useState(false);
 
@@ -467,6 +468,7 @@ const FacilitiesCapexDashboard: React.FC = () => {
       <div className="bg-slate-700 px-6">
         <div className="max-w-7xl mx-auto flex gap-1">
           {([
+            { id: 'summary', label: 'Summary', icon: '\u26a1' },
             { id: 'overview', label: 'Executive View', icon: '\ud83d\udcca' },
             { id: 'segmentation', label: 'Budget vs Actuals', icon: '\ud83d\udccb' },
             { id: 'breakeven', label: 'Unit Economics', icon: '\ud83c\udfaf' },
@@ -487,6 +489,395 @@ const FacilitiesCapexDashboard: React.FC = () => {
         </div>
 
       <div className="max-w-7xl mx-auto px-6 py-6">
+
+      {/* SUMMARY TAB */}
+      {activeTab === 'summary' && (
+        <div className="space-y-6">
+          {(() => {
+            const healthColorMap: Record<string, string> = {
+              green: '#22c55e', yellow: '#f59e0b', red: '#ef4444', gray: '#94a3b8',
+            };
+
+            // Schools at target count
+            const schoolsAtTarget = schools.filter(s => {
+              const facTotal = s.costs.lease.total + s.costs.fixedFacilities.total +
+                s.costs.variableFacilities.total + s.costs.studentServices.total;
+              const ue = calculateUnitEconomics(s.tuition, s.capacity, facTotal, s.costs.annualDepreciation.total);
+              return ue.marginPct >= getTargetPct(s.tuition);
+            }).length;
+
+            const operatingSchools = schools.filter(s => s.isOperating);
+
+            // Scatter 1: Utilization vs Facilities Cost % of Tuition (at capacity)
+            const scatterUtilData = operatingSchools.map(s => ({
+              name: s.displayName,
+              x: Math.round(s.utilizationRate * 100),
+              y: parseFloat(s.metrics.pctOfTuitionCapacity.toFixed(1)),
+              z: Math.max(s.capacity, 20),
+              health: s.healthScore as string,
+            }));
+
+            // Scatter 2: Portfolio Triage Quadrant
+            const triageData = schools.map(s => {
+              const facTotal = s.costs.lease.total + s.costs.fixedFacilities.total +
+                s.costs.variableFacilities.total + s.costs.studentServices.total;
+              const ue = calculateUnitEconomics(s.tuition, s.capacity, facTotal, s.costs.annualDepreciation.total);
+              return {
+                name: s.displayName,
+                x: parseFloat(ue.marginPct.toFixed(1)),
+                y: s.isOperating ? Math.round(s.utilizationRate * 100) : 0,
+                z: Math.max(s.capacity, 20),
+                health: s.healthScore as string,
+              };
+            });
+
+            // Revenue gap bars (top 15)
+            const gapData = [...schools]
+              .filter(s => s.revenue.revenueGap > 0)
+              .sort((a, b) => b.revenue.revenueGap - a.revenue.revenueGap)
+              .slice(0, 15)
+              .map(s => ({
+                name: s.displayName.length > 18 ? s.displayName.replace('Alpha ', 'A. ') : s.displayName,
+                current: s.revenue.current,
+                gap: s.revenue.revenueGap,
+                cost: s.costs.grandTotal,
+              }));
+
+            // Segment performance (per student at capacity)
+            const segTypes: SchoolType[] = ['alpha-school', 'growth-alpha', 'microschool', 'alternative', 'low-dollar'];
+            const segmentData = segTypes.map(type => {
+              const ts = schools.filter(s => s.schoolType === type);
+              if (ts.length === 0) return null;
+              const totalCap = Math.max(ts.reduce((s, sc) => s + sc.capacity, 0), 1);
+              return {
+                name: schoolTypeLabels[type],
+                lease: Math.round(ts.reduce((s, sc) => s + sc.costs.lease.total, 0) / totalCap),
+                fixedFac: Math.round(ts.reduce((s, sc) => s + sc.costs.fixedFacilities.total, 0) / totalCap),
+                varFac: Math.round(ts.reduce((s, sc) => s + sc.costs.variableFacilities.total, 0) / totalCap),
+                studentSvc: Math.round(ts.reduce((s, sc) => s + sc.costs.studentServices.total, 0) / totalCap),
+                depr: Math.round(ts.reduce((s, sc) => s + sc.costs.annualDepreciation.total, 0) / totalCap),
+                count: ts.length,
+              };
+            }).filter((d): d is NonNullable<typeof d> => d !== null);
+
+            // Controllability donut
+            const controlData = [
+              { name: 'Lease (Locked)', value: summary.totalLease, color: '#64748b' },
+              { name: 'Depreciation (Sunk)', value: summary.totalAnnualDepreciation, color: '#475569' },
+              { name: 'Fixed Facilities', value: summary.totalFixedFacilities, color: '#7c3aed' },
+              { name: 'Variable Facilities', value: summary.totalVariableFacilities, color: '#0d9488' },
+              { name: 'Student Services', value: summary.totalStudentServices, color: '#ea580c' },
+            ];
+            const sunkTotal = summary.totalLease + summary.totalAnnualDepreciation;
+            const sunkPct = summary.grandTotal > 0 ? (sunkTotal / summary.grandTotal * 100).toFixed(0) : '0';
+
+            return (
+              <>
+                {/* ===== HERO KPIs ===== */}
+                <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
+                  <div className="bg-slate-800 rounded-xl p-4 border border-slate-700">
+                    <div className="text-[10px] text-slate-400 uppercase tracking-wide font-medium">Annual Facilities</div>
+                    <div className="text-xl font-bold text-white mt-1">{formatCurrency(summary.grandTotal)}</div>
+                    <div className="text-xs text-slate-500 mt-0.5">{costVsRevenuePct}% of current revenue</div>
+                  </div>
+                  <div className="bg-slate-800 rounded-xl p-4 border border-slate-700">
+                    <div className="text-[10px] text-slate-400 uppercase tracking-wide font-medium">Current Revenue</div>
+                    <div className="text-xl font-bold text-green-400 mt-1">{formatCurrency(summary.totalRevenueCurrent)}</div>
+                    <div className="text-xs text-slate-500 mt-0.5">{summary.totalEnrollment} students</div>
+                  </div>
+                  <div className="bg-slate-800 rounded-xl p-4 border border-slate-700">
+                    <div className="text-[10px] text-slate-400 uppercase tracking-wide font-medium">Revenue at Capacity</div>
+                    <div className="text-xl font-bold text-blue-400 mt-1">{formatCurrency(summary.totalRevenueAtCapacity)}</div>
+                    <div className="text-xs text-slate-500 mt-0.5">{summary.totalCapacity} seats</div>
+                  </div>
+                  <div className="bg-amber-900/30 rounded-xl p-4 border border-amber-700">
+                    <div className="text-[10px] text-amber-400 uppercase tracking-wide font-medium">Revenue in Empty Seats</div>
+                    <div className="text-xl font-bold text-amber-300 mt-1">{formatCurrency(summary.totalRevenueGap)}</div>
+                    <div className="text-xs text-amber-600 mt-0.5">{emptySeats} unfilled seats</div>
+                  </div>
+                  <div className="bg-slate-800 rounded-xl p-4 border border-slate-700">
+                    <div className="text-[10px] text-slate-400 uppercase tracking-wide font-medium">Utilization</div>
+                    <div className={`text-xl font-bold mt-1 ${summary.avgUtilization < 50 ? 'text-red-400' : 'text-amber-400'}`}>
+                      {summary.avgUtilization.toFixed(0)}%
+                    </div>
+                    <div className="text-xs text-slate-500 mt-0.5">{summary.totalSchools} schools</div>
+                  </div>
+                  <div className="bg-slate-800 rounded-xl p-4 border border-slate-700">
+                    <div className="text-[10px] text-slate-400 uppercase tracking-wide font-medium">At Target Margin</div>
+                    <div className="text-xl font-bold text-white mt-1">
+                      {schoolsAtTarget}<span className="text-sm text-slate-400 font-normal">/{summary.totalSchools}</span>
+                    </div>
+                    <div className="text-xs text-slate-500 mt-0.5">at full capacity</div>
+                  </div>
+                </div>
+
+                {/* ===== ROW 2: SCATTER PLOTS ===== */}
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+
+                  {/* Scatter 1: Utilization vs Cost — The Core Insight */}
+                  <div className="table-card rounded-xl overflow-hidden">
+                    <div className="px-5 py-3 bg-slate-800 text-white">
+                      <h3 className="font-semibold">The Core Lever: Utilization Drives Everything</h3>
+                      <p className="text-xs text-slate-300 mt-0.5">Higher utilization → lower cost burden. Dot size = capacity. Operating schools only.</p>
+                    </div>
+                    <div className="p-4">
+                      <ResponsiveContainer width="100%" height={320}>
+                        <ScatterChart margin={{ top: 15, right: 15, bottom: 15, left: 5 }}>
+                          <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
+                          <XAxis
+                            type="number" dataKey="x" name="Utilization"
+                            domain={[0, 110]}
+                            tickFormatter={(v: number) => `${v}%`}
+                            stroke="#94a3b8" fontSize={11}
+                            label={{ value: 'Utilization %', position: 'insideBottom', offset: -5, fill: '#64748b', fontSize: 10 }}
+                          />
+                          <YAxis
+                            type="number" dataKey="y" name="Fac % of Tuition"
+                            tickFormatter={(v: number) => `${v}%`}
+                            stroke="#94a3b8" fontSize={11}
+                            label={{ value: 'Fac Cost % of Tuition (at Cap)', angle: -90, position: 'insideLeft', fill: '#64748b', fontSize: 10 }}
+                          />
+                          <ZAxis type="number" dataKey="z" range={[40, 350]} />
+                          <Tooltip
+                            content={({ active, payload }: any) => {
+                              if (!active || !payload?.length) return null;
+                              const d = payload[0].payload;
+                              return (
+                                <div className="bg-slate-800 border border-slate-600 rounded-lg p-2.5 text-xs shadow-xl">
+                                  <div className="font-bold text-white text-sm mb-1">{d.name}</div>
+                                  <div className="text-slate-300">Utilization: <span className="font-medium text-white">{d.x}%</span></div>
+                                  <div className="text-slate-300">Fac % of Tuition: <span className="font-medium text-white">{d.y}%</span></div>
+                                  <div className="text-slate-400 mt-0.5">Capacity: {d.z} seats</div>
+                                </div>
+                              );
+                            }}
+                          />
+                          <Scatter name="Schools" data={scatterUtilData}>
+                            {scatterUtilData.map((entry, idx) => (
+                              <Cell key={idx} fill={healthColorMap[entry.health] || '#94a3b8'} fillOpacity={0.85} />
+                            ))}
+                          </Scatter>
+                        </ScatterChart>
+                      </ResponsiveContainer>
+                      <div className="flex gap-4 text-xs text-slate-400 justify-center mt-1">
+                        <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-full bg-green-500" /> Keeper</span>
+                        <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-full bg-amber-500" /> Fill / Fix</span>
+                        <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-full bg-red-500" /> At Risk</span>
+                        <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-full bg-slate-400" /> Pre-Opening</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Scatter 2: Portfolio Triage Quadrant */}
+                  <div className="table-card rounded-xl overflow-hidden">
+                    <div className="px-5 py-3 bg-slate-800 text-white">
+                      <h3 className="font-semibold">Portfolio Triage: Where to Focus</h3>
+                      <p className="text-xs text-slate-300 mt-0.5">Margin at capacity (X) vs utilization (Y). Quadrants show action priority.</p>
+                    </div>
+                    <div className="p-4">
+                      <div className="relative">
+                        {/* Quadrant labels */}
+                        <div className="absolute top-2 right-4 text-[10px] text-green-400/70 font-bold uppercase tracking-wider z-10">Stars</div>
+                        <div className="absolute bottom-10 right-4 text-[10px] text-blue-400/70 font-bold uppercase tracking-wider z-10">Fill Seats</div>
+                        <div className="absolute top-2 left-16 text-[10px] text-amber-400/70 font-bold uppercase tracking-wider z-10">Cut Costs</div>
+                        <div className="absolute bottom-10 left-16 text-[10px] text-red-400/70 font-bold uppercase tracking-wider z-10">Review</div>
+                        <ResponsiveContainer width="100%" height={320}>
+                          <ScatterChart margin={{ top: 15, right: 15, bottom: 15, left: 5 }}>
+                            <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
+                            <XAxis
+                              type="number" dataKey="x" name="Margin at Capacity"
+                              tickFormatter={(v: number) => `${v}%`}
+                              stroke="#94a3b8" fontSize={11}
+                              label={{ value: 'Margin % at Capacity', position: 'insideBottom', offset: -5, fill: '#64748b', fontSize: 10 }}
+                            />
+                            <YAxis
+                              type="number" dataKey="y" name="Utilization"
+                              domain={[0, 110]}
+                              tickFormatter={(v: number) => `${v}%`}
+                              stroke="#94a3b8" fontSize={11}
+                              label={{ value: 'Current Utilization %', angle: -90, position: 'insideLeft', fill: '#64748b', fontSize: 10 }}
+                            />
+                            <ZAxis type="number" dataKey="z" range={[40, 350]} />
+                            <ReferenceLine x={0} stroke="#94a3b8" strokeDasharray="6 3" strokeWidth={1.5} />
+                            <ReferenceLine y={50} stroke="#94a3b8" strokeDasharray="6 3" strokeWidth={1.5} />
+                            <Tooltip
+                              content={({ active, payload }: any) => {
+                                if (!active || !payload?.length) return null;
+                                const d = payload[0].payload;
+                                return (
+                                  <div className="bg-slate-800 border border-slate-600 rounded-lg p-2.5 text-xs shadow-xl">
+                                    <div className="font-bold text-white text-sm mb-1">{d.name}</div>
+                                    <div className="text-slate-300">Margin at Cap: <span className="font-medium text-white">{d.x}%</span></div>
+                                    <div className="text-slate-300">Utilization: <span className="font-medium text-white">{d.y}%</span></div>
+                                    <div className="text-slate-400 mt-0.5">Capacity: {d.z} seats</div>
+                                  </div>
+                                );
+                              }}
+                            />
+                            <Scatter name="Schools" data={triageData}>
+                              {triageData.map((entry, idx) => (
+                                <Cell key={idx} fill={healthColorMap[entry.health] || '#94a3b8'} fillOpacity={0.85} />
+                              ))}
+                            </Scatter>
+                          </ScatterChart>
+                        </ResponsiveContainer>
+                      </div>
+                      <div className="flex gap-4 text-xs text-slate-400 justify-center mt-1">
+                        <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-full bg-green-500" /> Keeper</span>
+                        <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-full bg-amber-500" /> Fill / Fix</span>
+                        <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-full bg-red-500" /> At Risk</span>
+                        <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-full bg-slate-400" /> Pre-Opening</span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* ===== ROW 3: REVENUE GAP ===== */}
+                <div className="table-card rounded-xl overflow-hidden">
+                  <div className="px-5 py-3 bg-slate-800 text-white flex items-center justify-between">
+                    <div>
+                      <h3 className="font-semibold">{formatCurrency(summary.totalRevenueGap)} Revenue Sitting in Empty Seats</h3>
+                      <p className="text-xs text-slate-300 mt-0.5">Green = current revenue. Light bar = additional revenue at full capacity. Red line = annual facilities cost. Fill past the red line to cover costs.</p>
+                    </div>
+                  </div>
+                  <div className="p-4" style={{ height: Math.max(350, gapData.length * 30 + 60) }}>
+                    <ResponsiveContainer width="100%" height="100%">
+                      <BarChart data={gapData} layout="vertical" margin={{ left: 140, right: 40, top: 5, bottom: 5 }}>
+                        <CartesianGrid strokeDasharray="3 3" stroke="#334155" horizontal={false} />
+                        <XAxis
+                          type="number"
+                          tickFormatter={(v: number) => formatCurrency(v)}
+                          stroke="#94a3b8" fontSize={11}
+                        />
+                        <YAxis
+                          type="category" dataKey="name" width={130}
+                          tick={{ fill: '#cbd5e1', fontSize: 11 }} tickLine={false}
+                        />
+                        <Tooltip
+                          formatter={(v: number, name: string) => [formatCurrency(v), name]}
+                          contentStyle={{ backgroundColor: '#1e293b', border: '1px solid #475569', borderRadius: 8, fontSize: 12 }}
+                          labelStyle={{ color: '#e2e8f0', fontWeight: 600 }}
+                        />
+                        <Legend wrapperStyle={{ fontSize: 12, color: '#94a3b8', paddingTop: 8 }} />
+                        <Bar dataKey="current" name="Current Revenue" stackId="rev" fill="#22c55e" barSize={16} radius={[0, 0, 0, 0]} />
+                        <Bar dataKey="gap" name="Revenue Gap (to Capacity)" stackId="rev" fill="#86efac" barSize={16} radius={[0, 4, 4, 0]} fillOpacity={0.5} />
+                        <Bar dataKey="cost" name="Facilities Cost" fill="#ef4444" barSize={6} radius={[0, 3, 3, 0]} fillOpacity={0.7} />
+                      </BarChart>
+                    </ResponsiveContainer>
+                  </div>
+                </div>
+
+                {/* ===== ROW 4: SEGMENT COMPARISON + CONTROLLABILITY ===== */}
+                <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+
+                  {/* Cost Structure by School Type */}
+                  <div className="table-card rounded-xl overflow-hidden lg:col-span-2">
+                    <div className="px-5 py-3 bg-slate-800 text-white">
+                      <h3 className="font-semibold">Cost Structure by School Type (per student at capacity)</h3>
+                      <p className="text-xs text-slate-300 mt-0.5">Weighted average across all schools in each type. Shows what drives cost by segment.</p>
+                    </div>
+                    <div className="p-4">
+                      <ResponsiveContainer width="100%" height={300}>
+                        <BarChart data={segmentData} margin={{ top: 10, right: 20, bottom: 5, left: 10 }}>
+                          <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
+                          <XAxis dataKey="name" tick={{ fill: '#cbd5e1', fontSize: 11 }} stroke="#94a3b8" />
+                          <YAxis
+                            tickFormatter={(v: number) => `$${(v / 1000).toFixed(0)}K`}
+                            stroke="#94a3b8" fontSize={11}
+                          />
+                          <Tooltip
+                            formatter={(v: number, name: string) => [`$${v.toLocaleString()}/student`, name]}
+                            contentStyle={{ backgroundColor: '#1e293b', border: '1px solid #475569', borderRadius: 8, fontSize: 12 }}
+                            labelStyle={{ color: '#e2e8f0', fontWeight: 600 }}
+                          />
+                          <Legend wrapperStyle={{ fontSize: 11, color: '#94a3b8' }} />
+                          <Bar dataKey="lease" name="Lease" stackId="cost" fill="#1e40af" />
+                          <Bar dataKey="depr" name="Depreciation" stackId="cost" fill="#475569" />
+                          <Bar dataKey="fixedFac" name="Fixed Facilities" stackId="cost" fill="#7c3aed" />
+                          <Bar dataKey="varFac" name="Variable Facilities" stackId="cost" fill="#0d9488" />
+                          <Bar dataKey="studentSvc" name="Student Services" stackId="cost" fill="#ea580c" radius={[4, 4, 0, 0]} />
+                        </BarChart>
+                      </ResponsiveContainer>
+                      <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-slate-400 mt-2 justify-center">
+                        {segmentData.map(d => (
+                          <span key={d.name}>{d.name}: {d.count} schools, ${(d.lease + d.depr + d.fixedFac + d.varFac + d.studentSvc).toLocaleString()}/student</span>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Controllability Donut */}
+                  <div className="table-card rounded-xl overflow-hidden">
+                    <div className="px-5 py-3 bg-slate-800 text-white">
+                      <h3 className="font-semibold">What You Can Actually Change</h3>
+                      <p className="text-xs text-slate-300 mt-0.5">{sunkPct}% of facilities cost is locked in (lease + depreciation).</p>
+                    </div>
+                    <div className="p-4">
+                      <div className="relative">
+                        <div className="absolute inset-0 flex items-center justify-center z-10 pointer-events-none" style={{ paddingBottom: 40 }}>
+                          <div className="text-center">
+                            <div className="text-3xl font-bold text-white">{sunkPct}%</div>
+                            <div className="text-[10px] text-slate-400 uppercase tracking-wide">locked in</div>
+                          </div>
+                        </div>
+                        <ResponsiveContainer width="100%" height={230}>
+                          <PieChart>
+                            <Pie
+                              data={controlData}
+                              dataKey="value"
+                              cx="50%" cy="50%"
+                              innerRadius={55} outerRadius={85}
+                              paddingAngle={2}
+                            >
+                              {controlData.map((entry, idx) => (
+                                <Cell key={idx} fill={entry.color} />
+                              ))}
+                            </Pie>
+                            <Tooltip
+                              formatter={(value: number) => formatCurrency(value)}
+                              contentStyle={{ backgroundColor: '#1e293b', border: '1px solid #475569', borderRadius: 8, fontSize: 12 }}
+                            />
+                          </PieChart>
+                        </ResponsiveContainer>
+                      </div>
+                      <div className="space-y-1.5 text-xs">
+                        {controlData.map(d => (
+                          <div key={d.name} className="flex items-center justify-between">
+                            <div className="flex items-center gap-2">
+                              <div className="w-3 h-3 rounded" style={{ backgroundColor: d.color }} />
+                              <span className="text-slate-300">{d.name}</span>
+                            </div>
+                            <span className="font-medium text-white">{formatCurrency(d.value)}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* ===== ROW 5: KEY INSIGHT BANNER ===== */}
+                <div className="bg-slate-800/80 border border-slate-700 rounded-xl p-5">
+                  <div className="text-sm text-slate-200 space-y-2">
+                    <div className="font-semibold text-white text-base mb-2">Key Insights</div>
+                    <div className="flex items-start gap-2">
+                      <span className="text-blue-400 font-bold mt-0.5">1.</span>
+                      <span><strong className="text-white">Utilization is the #1 lever.</strong> At {summary.avgUtilization.toFixed(0)}% utilization, fixed costs are spread across too few students. Filling {emptySeats} empty seats adds {formatCurrency(summary.totalRevenueGap)} in revenue without adding facilities cost.</span>
+                    </div>
+                    <div className="flex items-start gap-2">
+                      <span className="text-blue-400 font-bold mt-0.5">2.</span>
+                      <span><strong className="text-white">{sunkPct}% of costs are locked in.</strong> Lease + depreciation can&apos;t be reduced. The controllable portion (facilities operations + student services) is {formatCurrency(summary.totalControllableCosts)} — that&apos;s where to negotiate vendor contracts.</span>
+                    </div>
+                    <div className="flex items-start gap-2">
+                      <span className="text-blue-400 font-bold mt-0.5">3.</span>
+                      <span><strong className="text-white">Only {schoolsAtTarget}/{summary.totalSchools} schools reach target margin at capacity.</strong> For the rest, even 100% enrollment won&apos;t hit the tier target — these need structural cost review or lease renegotiation at renewal.</span>
+                    </div>
+                  </div>
+                </div>
+              </>
+            );
+          })()}
+        </div>
+      )}
 
       {/* BUDGET VS ACTUALS TAB */}
       {activeTab === 'segmentation' && (
