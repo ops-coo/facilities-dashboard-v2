@@ -595,24 +595,29 @@ const FacilitiesCapexDashboard: React.FC = () => {
             const sunkTotal = summary.totalLease + summary.totalAnnualDepreciation;
             const sunkPct = summary.grandTotal > 0 ? (sunkTotal / summary.grandTotal * 100).toFixed(0) : '0';
 
-            // Cost/sqft by type (for comps table)
+            // Cost/sqft by type (for chart + comps table)
             const sqftByType = typeOrder.map(type => {
               const ts = schools.filter(s => s.schoolType === type && s.sqft > 0);
               if (ts.length === 0) return null;
               const sqft = Math.max(ts.reduce((s, sc) => s + sc.sqft, 0), 1);
               const lease = ts.reduce((s, sc) => s + sc.costs.lease.total, 0);
               const ops = ts.reduce((s, sc) => s + sc.costs.fixedFacilities.total + sc.costs.variableFacilities.total + sc.costs.annualDepreciation.total, 0);
+              const svc = ts.reduce((s, sc) => s + sc.costs.studentServices.total, 0);
               return {
                 label: schoolTypeLabels[type],
                 lease: Math.round(lease / sqft),
                 ops: Math.round(ops / sqft),
-                total: Math.round((lease + ops) / sqft),
+                svc: Math.round(svc / sqft),
+                buildingOnly: Math.round((lease + ops) / sqft),
+                total: Math.round((lease + ops + svc) / sqft),
               };
             }).filter((d): d is NonNullable<typeof d> => d !== null);
             const portfolioSqft = Math.max(summary.totalSqft, 1);
             const portfolioLeasePSF = Math.round(summary.totalLease / portfolioSqft);
             const portfolioOpsPSF = Math.round((summary.totalFixedFacilities + summary.totalVariableFacilities + summary.totalAnnualDepreciation) / portfolioSqft);
-            const portfolioTotalPSF = portfolioLeasePSF + portfolioOpsPSF;
+            const portfolioSvcPSF = Math.round(summary.totalStudentServices / portfolioSqft);
+            const portfolioBuildingPSF = portfolioLeasePSF + portfolioOpsPSF;
+            const portfolioTotalPSF = portfolioBuildingPSF + portfolioSvcPSF;
 
             // CapEx cash exposure — the REAL capex story
             const capexSortedSchools = [...schools].sort((a, b) => b.costs.capexBuildout - a.costs.capexBuildout);
@@ -839,7 +844,8 @@ const FacilitiesCapexDashboard: React.FC = () => {
                           />
                           <Legend wrapperStyle={{ fontSize: 11, color: '#94a3b8' }} />
                           <Bar dataKey="lease" name="Lease" stackId="sqft" fill="#1e40af" barSize={32} />
-                          <Bar dataKey="ops" name="Building Ops" stackId="sqft" fill="#7c3aed" barSize={32} radius={[4, 4, 0, 0]} />
+                          <Bar dataKey="ops" name="Building Ops" stackId="sqft" fill="#7c3aed" barSize={32} />
+                          <Bar dataKey="svc" name="Food / Transport" stackId="sqft" fill="#ea580c" barSize={32} radius={[4, 4, 0, 0]} />
                         </BarChart>
                       </ResponsiveContainer>
                     </div>
@@ -881,15 +887,35 @@ const FacilitiesCapexDashboard: React.FC = () => {
                             <td className="px-3 py-2 text-right text-green-300">$10–15</td>
                             <td className="px-3 py-2 text-right text-slate-400">$6–10</td>
                           </tr>
-                          <tr className="bg-slate-800/40 font-bold hover:bg-slate-800/60">
-                            <td className="px-3 py-2 text-xs text-white">Total Building</td>
-                            <td className={`px-3 py-2 text-right text-base bg-blue-900/10 ${portfolioTotalPSF > 50 ? 'text-red-400' : portfolioTotalPSF > 30 ? 'text-amber-400' : 'text-green-400'}`}>${portfolioTotalPSF}</td>
+                          <tr className="bg-slate-800/30 font-semibold hover:bg-slate-800/50">
+                            <td className="px-3 py-2 text-xs text-slate-200">Building Subtotal</td>
+                            <td className={`px-3 py-2 text-right bg-blue-900/10 ${portfolioBuildingPSF > 50 ? 'text-red-400' : portfolioBuildingPSF > 30 ? 'text-amber-400' : 'text-green-400'}`}>${portfolioBuildingPSF}</td>
                             {sqftByType.map(t => (
-                              <td key={t.label} className={`px-3 py-2 text-right ${t.total > 50 ? 'text-red-400' : t.total > 30 ? 'text-amber-400' : 'text-green-400'}`}>${t.total}</td>
+                              <td key={t.label} className={`px-3 py-2 text-right ${t.buildingOnly > 50 ? 'text-red-400' : t.buildingOnly > 30 ? 'text-amber-400' : 'text-green-400'}`}>${t.buildingOnly}</td>
                             ))}
                             <td className="px-3 py-2 text-right text-amber-300 border-l border-slate-600">$40–65</td>
                             <td className="px-3 py-2 text-right text-green-300">$28–40</td>
                             <td className="px-3 py-2 text-right text-slate-400">$18–28</td>
+                          </tr>
+                          <tr className="hover:bg-slate-800/50">
+                            <td className="px-3 py-2 text-xs text-slate-300 font-medium">Food / Transport</td>
+                            <td className="px-3 py-2 text-right text-orange-400 bg-blue-900/10">${portfolioSvcPSF}</td>
+                            {sqftByType.map(t => (
+                              <td key={t.label} className="px-3 py-2 text-right text-orange-300">${t.svc}</td>
+                            ))}
+                            <td className="px-3 py-2 text-right text-slate-500 border-l border-slate-600" colSpan={3}>
+                              <span className="text-[10px]">Varies — not in building comps</span>
+                            </td>
+                          </tr>
+                          <tr className="bg-slate-800/40 font-bold hover:bg-slate-800/60 border-t border-slate-600">
+                            <td className="px-3 py-2 text-xs text-white">All-In Total</td>
+                            <td className="px-3 py-2 text-right text-base text-white bg-blue-900/10">${portfolioTotalPSF}</td>
+                            {sqftByType.map(t => (
+                              <td key={t.label} className="px-3 py-2 text-right text-white font-bold">${t.total}</td>
+                            ))}
+                            <td className="px-3 py-2 text-right text-slate-500 border-l border-slate-600" colSpan={3}>
+                              <span className="text-[10px]">Matches Executive View</span>
+                            </td>
                           </tr>
                         </tbody>
                       </table>
