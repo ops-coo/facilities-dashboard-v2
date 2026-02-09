@@ -8,3 +8,49 @@ body {
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
+
+/* ================================================================
+   DARK THEME — single source of truth
+   Everything inside .table-card gets dark treatment via CSS.
+   No Tailwind overrides needed — this catches ALL backgrounds.
+   ================================================================ */
+
+.table-card {
+  background: #1e293b; /* slate-800 */
+  border-radius: 0.75rem;
+  overflow: hidden;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.25);
+}
+
+/* All table elements: dark bg, light text — !important to override Tailwind utilities */
+.table-card table          { background: #0f172a !important; color: #e2e8f0 !important; }
+.table-card thead          { background: #1e293b !important; }
+.table-card thead th       { background: #1e293b !important; color: #94a3b8 !important; border-bottom: 1px solid #334155 !important; }
+.table-card tbody td       { background-color: #0f172a !important; border-color: #1e293b !important; }
+
+/* Zebra stripe */
+.table-card tbody tr:nth-child(odd) td  { background-color: #111827 !important; }
+.table-card tbody tr:nth-child(even) td { background-color: #0f172a !important; }
+
+/* Hover */
+.table-card tbody tr:hover td { background: #1e293b !important; }
+
+/* Portfolio / total rows */
+.table-card tbody tr:last-child td,
+.table-card tbody tr.font-bold td { background: #1e293b !important; color: #f1f5f9; }
+
+/* Sticky column — matches row bg with shadow */
+.table-card td[style*="sticky"],
+.table-card th[style*="sticky"] {
+  box-shadow: 3px 0 8px -3px rgba(0,0,0,0.4);
+}
+.table-card tbody tr:nth-child(odd) td[style*="sticky"]  { background: #111827 !important; }
+.table-card tbody tr:nth-child(even) td[style*="sticky"] { background: #0f172a !important; }
+.table-card tbody tr:hover td[style*="sticky"]            { background: #1e293b !important; }
+.table-card tbody tr.font-bold td[style*="sticky"]        { background: #1e293b !important; }
+
+/* Answer column glow */
+.table-card td.answer-glow {
+  background: rgba(99,102,241,0.12) !important;
+  border-left: 2px solid #818cf8;
+}

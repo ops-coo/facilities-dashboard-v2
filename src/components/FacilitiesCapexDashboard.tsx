@@ -1,6 +1,9 @@
 /**
  * Facilities & Capex Cost Analysis Dashboard
  *
+ * Andy-style decision tool: Revenue alongside costs, health scoring,
+ * marginal economics, and controllability splits.
+ *
  * 6-CATEGORY VIEW:
  * 1. Lease - Rent commitment (fixed, day 1)
  * 2. Fixed Facilities Cost - Security, IT, Landscaping (doesn't scale)
@@ -8,31 +11,27 @@
  * 4. Student Services - Food Services, Transportation (scales with students)
  * 5. Annual Depreciation - Depreciation/Amortization
  * 6. CapEx Buildout - One-time capital expenditure (shown separately)
- *
- * Key Insight: Once you sign the lease and spend the capex, you commit to these
- * fixed costs regardless of enrollment.
  */
 
 import React, { useState, useMemo } from 'react';
 import {
+  PieChart, Pie, Cell, Tooltip, ResponsiveContainer,
+  BarChart, Bar, XAxis, YAxis, CartesianGrid, ReferenceLine, Legend,
+} from 'recharts';
+import {
   buildSchoolData,
   calculatePortfolioSummary,
-  generateInsights,
-  getExpenseRules,
-  aggregateBySchoolType,
-  aggregateByTuitionTier,
-  calculateScenario,
+  calculateUnitEconomics,
+  getTargetPct,
   schoolTypeLabels,
   tuitionTierLabels,
-  categoryColors,
   presetLabels,
   type SchoolData,
   type PortfolioSummary,
   type SchoolType,
   type TuitionTier,
-  type SegmentSummary,
-  type ScenarioResult,
   type ExpensePreset,
+  type HealthScore,
 } from '../data/facilitiesCapexData';
 
 // ============================================================================
@@ -40,111 +39,30 @@ import {
 // ============================================================================
 
 const formatCurrency = (val: number): string => {
-  if (val >= 1000000) return `$${(val / 1000000).toFixed(2)}M`;
-  if (val >= 1000) return `$${(val / 1000).toFixed(0)}K`;
+  if (Math.abs(val) >= 1000000) return `$${(val / 1000000).toFixed(2)}M`;
+  if (Math.abs(val) >= 1000) return `$${(val / 1000).toFixed(0)}K`;
   return `$${val.toFixed(0)}`;
 };
 
-const MetricCard: React.FC<{
-  title: string;
-  value: string;
-  subtitle?: string;
-  color?: 'default' | 'warning' | 'danger' | 'success' | 'blue' | 'violet' | 'teal' | 'red' | 'orange' | 'slate';
-}> = ({ title, value, subtitle, color = 'default' }) => {
-  const colorClasses: Record<string, string> = {
-    default: 'bg-white border-gray-200',
-    warning: 'bg-amber-50 border-amber-200',
-    danger: 'bg-red-50 border-red-200',
-    success: 'bg-green-50 border-green-200',
-    blue: 'bg-blue-50 border-blue-200',
-    violet: 'bg-violet-50 border-violet-200',
-    teal: 'bg-teal-50 border-teal-200',
-    red: 'bg-red-50 border-red-200',
-    orange: 'bg-orange-50 border-orange-200',
-    slate: 'bg-slate-50 border-slate-200',
+// Sort helpers removed — using inline sort state instead
+
+// (MetricCard removed — replaced by inline layouts)
+
+// CategoryBar, SchoolCostBreakdown, UtilizationBadge removed — replaced by pie charts + category table
+
+const HealthBadge: React.FC<{ score: HealthScore; verdict: string }> = ({ score, verdict }) => {
+  const config: Record<HealthScore, { bg: string; dot: string }> = {
+    green: { bg: 'bg-green-100 text-green-800', dot: 'bg-green-500' },
+    yellow: { bg: 'bg-amber-100 text-amber-800', dot: 'bg-amber-500' },
+    red: { bg: 'bg-red-100 text-red-800', dot: 'bg-red-500' },
+    gray: { bg: 'bg-gray-100 text-slate-400', dot: 'bg-gray-400' },
   };
+  const { bg, dot } = config[score];
 
   return (
-    <div className={`rounded-lg border p-4 ${colorClasses[color]}`}>
-      <div className="text-sm text-gray-500 font-medium">{title}</div>
-      <div className="text-2xl font-bold mt-1">{value}</div>
-      {subtitle && <div className="text-xs text-gray-400 mt-1">{subtitle}</div>}
-    </div>
-  );
-};
-
-const CategoryBar: React.FC<{ summary: PortfolioSummary }> = ({ summary }) => {
-  return (
-    <div className="space-y-2">
-      <div className="flex h-8 rounded-lg overflow-hidden">
-        {summary.categoryBreakdown.map((cat) => (
-          <div
-            key={cat.category}
-            style={{
-              width: `${cat.pctOfTotal}%`,
-              backgroundColor: cat.color,
-            }}
-            className="flex items-center justify-center"
-            title={`${cat.category}: ${formatCurrency(cat.amount)} (${cat.pctOfTotal.toFixed(1)}%)`}
-          >
-            {cat.pctOfTotal > 8 && (
-              <span className="text-white text-xs font-medium truncate px-1">
-                {cat.pctOfTotal.toFixed(0)}%
-              </span>
-            )}
-          </div>
-        ))}
-      </div>
-      <div className="flex flex-wrap gap-4 text-xs">
-        {summary.categoryBreakdown.map((cat) => (
-          <div key={cat.category} className="flex items-center gap-1">
-            <div className="w-3 h-3 rounded" style={{ backgroundColor: cat.color }} />
-            <span className="text-gray-600">{cat.category}</span>
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-};
-
-const SchoolCostBreakdown: React.FC<{ school: SchoolData }> = ({ school }) => {
-  const categories = [
-    { name: 'Lease', value: school.costs.lease.total, color: categoryColors.lease },
-    { name: 'Fixed Facilities', value: school.costs.fixedFacilities.total, color: categoryColors.fixedFacilities },
-    { name: 'Variable Facilities', value: school.costs.variableFacilities.total, color: categoryColors.variableFacilities },
-    { name: 'Student Services', value: school.costs.studentServices.total, color: categoryColors.studentServices },
-    { name: 'Annual Depreciation', value: school.costs.annualDepreciation.total, color: categoryColors.annualDepreciation },
-  ].filter((c) => c.value > 0);
-
-  const total = school.costs.grandTotal;
-  if (total === 0) return <div className="text-gray-400 text-sm">No data</div>;
-
-  return (
-    <div className="flex h-4 rounded overflow-hidden">
-      {categories.map((cat) => (
-        <div
-          key={cat.name}
-          style={{
-            width: `${(cat.value / total) * 100}%`,
-            backgroundColor: cat.color,
-          }}
-          title={`${cat.name}: ${formatCurrency(cat.value)} (${((cat.value / total) * 100).toFixed(1)}%)`}
-        />
-      ))}
-    </div>
-  );
-};
-
-const UtilizationBadge: React.FC<{ rate: number }> = ({ rate }) => {
-  const pct = rate * 100;
-  let colorClass = 'bg-red-100 text-red-800';
-  if (pct >= 75) colorClass = 'bg-green-100 text-green-800';
-  else if (pct >= 50) colorClass = 'bg-amber-100 text-amber-800';
-  else if (pct >= 25) colorClass = 'bg-orange-100 text-orange-800';
-
-  return (
-    <span className={`text-xs px-2 py-1 rounded ${colorClass}`}>
-      {pct.toFixed(0)}%
+    <span className={`inline-flex items-center gap-1.5 text-xs px-2 py-1 rounded ${bg}`} title={verdict}>
+      <span className={`w-2 h-2 rounded-full ${dot}`} />
+      {verdict}
     </span>
   );
 };
@@ -158,12 +76,12 @@ const PresetToggle: React.FC<{
   onChange: (preset: ExpensePreset) => void;
 }> = ({ preset, onChange }) => {
   return (
-    <div className="flex items-center gap-2 bg-gray-100 rounded-lg p-1">
+    <div className="flex items-center gap-2 bg-slate-600/50 rounded-lg p-1">
       <button
         className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors ${
           preset === 'dashboard'
-            ? 'bg-white text-blue-700 shadow-sm'
-            : 'text-gray-500 hover:text-gray-700'
+            ? 'bg-white text-slate-800 shadow-sm'
+            : 'text-slate-300 hover:text-white'
         }`}
         onClick={() => onChange('dashboard')}
       >
@@ -172,8 +90,8 @@ const PresetToggle: React.FC<{
       <button
         className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors ${
           preset === 'expense-report'
-            ? 'bg-white text-blue-700 shadow-sm'
-            : 'text-gray-500 hover:text-gray-700'
+            ? 'bg-white text-slate-800 shadow-sm'
+            : 'text-slate-300 hover:text-white'
         }`}
         onClick={() => onChange('expense-report')}
       >
@@ -184,240 +102,199 @@ const PresetToggle: React.FC<{
 };
 
 // ============================================================================
-// DECISION RECOMMENDATION PANEL (Andy-style)
+// OPERATING STATUS TOGGLE
 // ============================================================================
 
-const DecisionPanel: React.FC<{ schools: SchoolData[]; summary: PortfolioSummary }> = ({
-  schools,
-  summary,
-}) => {
-  const underutilized = schools.filter((s) => s.utilizationRate < 0.5);
-  const cantReach15 = schools.filter((s) => s.breakeven.studentsFor15Pct > s.capacity);
+type OperatingFilter = 'all' | 'operating' | 'pre-opening';
 
-  const opportunities = [...schools]
-    .filter((s) => s.utilizationRate < 0.8 && s.currentEnrollment > 0)
-    .sort((a, b) => {
-      const aGap = a.capacity - a.currentEnrollment;
-      const bGap = b.capacity - b.currentEnrollment;
-      return bGap - aGap;
-    })
-    .slice(0, 3);
-
-  const sortedByLease = [...schools].sort((a, b) => b.costs.lease.total - a.costs.lease.total);
-  const top3Lease = sortedByLease.slice(0, 3);
-  const top3LeasePct =
-    summary.totalLease > 0
-      ? (top3Lease.reduce((sum, s) => sum + s.costs.lease.total, 0) / summary.totalLease) * 100
-      : 0;
-
-  const avgTuition =
-    schools.length > 0
-      ? schools.reduce((sum, s) => sum + s.tuition, 0) / schools.length
-      : 40000;
-
+const OperatingToggle: React.FC<{
+  value: OperatingFilter;
+  onChange: (val: OperatingFilter) => void;
+}> = ({ value, onChange }) => {
+  const options: { id: OperatingFilter; label: string }[] = [
+    { id: 'all', label: 'All Schools' },
+    { id: 'operating', label: 'Operating' },
+    { id: 'pre-opening', label: 'Pre-Opening' },
+  ];
   return (
-    <div className="bg-gradient-to-r from-gray-900 to-gray-800 rounded-lg shadow-lg p-6 text-white mb-6">
-      <div className="flex items-center gap-2 mb-4">
-        <span className="text-xl">📊</span>
-        <h2 className="text-lg font-bold">Decision Summary</h2>
-        <span className="text-xs text-gray-400 ml-auto">
-          Andy-style: What does the data say?
-        </span>
-      </div>
-
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-        <div>
-          <div className="text-xs text-amber-400 uppercase tracking-wide mb-2">The Question</div>
-          <div className="text-sm text-gray-300">
-            How do we reduce facilities burden from{' '}
-            <span className="font-bold text-white">
-              {summary.totalEnrollment > 0
-                ? ((summary.grandTotal / (summary.totalEnrollment * avgTuition)) * 100).toFixed(0)
-                : '∞'}
-              %
-            </span>{' '}
-            of avg tuition to target{' '}
-            <span className="font-bold text-green-400">15%</span>?
-          </div>
-        </div>
-
-        <div>
-          <div className="text-xs text-amber-400 uppercase tracking-wide mb-2">Key Finding</div>
-          <div className="text-sm text-gray-300">
-            <span className="font-bold text-white">{underutilized.length}</span> schools under 50%
-            capacity. Filling these first is cheaper than signing new leases.
-          </div>
-          {underutilized.length > 0 && (
-            <div className="text-xs text-gray-400 mt-1">
-              ({underutilized.map((s) => s.displayName.split(' ')[0]).join(', ')})
-            </div>
-          )}
-        </div>
-
-        <div>
-          <div className="text-xs text-amber-400 uppercase tracking-wide mb-2">
-            Lease Concentration
-          </div>
-          <div className="text-sm text-gray-300">
-            Top 3 leases ={' '}
-            <span className="font-bold text-white">{top3LeasePct.toFixed(0)}%</span> of total lease
-            exposure
-          </div>
-          <div className="text-xs text-gray-400 mt-1">
-            {top3Lease
-              .map(
-                (s) =>
-                  `${s.displayName.split(' ').slice(0, 2).join(' ')}: ${formatCurrency(s.costs.lease.total)}`
-              )
-              .join(' • ')}
-          </div>
-        </div>
-      </div>
-
-      {/* Top 3 Actions */}
-      <div className="mt-6 pt-4 border-t border-gray-700">
-        <div className="text-xs text-amber-400 uppercase tracking-wide mb-3">
-          Recommended Actions
-        </div>
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          {opportunities.map((school, idx) => {
-            const studentsNeeded = school.capacity - school.currentEnrollment;
-            return (
-              <div key={school.id} className="bg-gray-700/50 rounded p-3">
-                <div className="flex items-center gap-2 mb-1">
-                  <span className="text-xs bg-amber-500 text-black px-1.5 py-0.5 rounded font-bold">
-                    #{idx + 1}
-                  </span>
-                  <span className="text-sm font-medium">{school.displayName}</span>
-                </div>
-                <div className="text-xs text-gray-400">
-                  Add{' '}
-                  <span className="text-green-400 font-medium">{studentsNeeded}</span> students →
-                  facilities drops to{' '}
-                  <span className="text-green-400 font-medium">
-                    {school.breakeven.pctAt100Capacity.toFixed(0)}%
-                  </span>{' '}
-                  of tuition
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      </div>
-
-      {cantReach15.length > 0 && (
-        <div className="mt-4 p-3 bg-red-900/30 border border-red-500/50 rounded">
-          <div className="text-xs text-red-400">
-            ⚠️{' '}
-            <strong>
-              {cantReach15.length} schools cannot reach 15% target even at full capacity:
-            </strong>{' '}
-            {cantReach15.map((s) => s.displayName.split(' ').slice(0, 2).join(' ')).join(', ')}.
-            Consider lease renegotiation or closure.
-          </div>
-        </div>
-      )}
+    <div className="flex items-center gap-1 bg-slate-600/50 rounded-lg p-1">
+      {options.map((opt) => (
+        <button
+          key={opt.id}
+          className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors ${
+            value === opt.id
+              ? 'bg-white text-slate-800 shadow-sm'
+              : 'text-slate-300 hover:text-white'
+          }`}
+          onClick={() => onChange(opt.id)}
+        >
+          {opt.label}
+        </button>
+      ))}
     </div>
   );
 };
 
+
+// ============================================================================
+// CONTROLLABILITY SPLIT (replaces Fixed Cost Warning)
+// ============================================================================
+
+// ControllabilitySplit removed — replaced with pie chart in overview
+
+// ============================================================================
+// MARGINAL ECONOMICS TABLE
 // ============================================================================
 // NEW SCHOOL ECONOMICS CALCULATOR
 // ============================================================================
 
-const NewSchoolCalculator: React.FC = () => {
-  const [leaseAmount, setLeaseAmount] = React.useState(150000);
-  const [tuition, setTuition] = React.useState(40000);
+const NewSchoolCalculator: React.FC<{ summary?: PortfolioSummary }> = ({ summary }) => {
+  const [dealName, setDealName] = React.useState('Boca Raton — 2200 NW 5th Ave');
+  const [leaseAmount, setLeaseAmount] = React.useState(180000);
+  const [tuition, setTuition] = React.useState(50000);
+  const [capacity, setCapacity] = React.useState(40);
+  const [sqft, setSqft] = React.useState(8000);
   const [fixedFacilitiesPct, setFixedFacilitiesPct] = React.useState(25);
-  const [capexBuildout, setCapexBuildout] = React.useState(100000);
+  const [capexBuildout, setCapexBuildout] = React.useState(250000);
   const [amortYears, setAmortYears] = React.useState(5);
+  const [leaseTerm, setLeaseTerm] = React.useState(5);
+  const [earlyWalkYears, setEarlyWalkYears] = React.useState(2);
 
   const annualDepreciation = capexBuildout / amortYears;
-  const totalFixed = leaseAmount * (1 + fixedFacilitiesPct / 100) + annualDepreciation;
+  const fixedFacCost = leaseAmount * (fixedFacilitiesPct / 100);
+  const totalFixed = leaseAmount + fixedFacCost + annualDepreciation;
+  const totalCommitment = leaseAmount * leaseTerm + capexBuildout;
+  const earlyWalkExposure = leaseAmount * earlyWalkYears + capexBuildout;
+  const leasePerSqft = sqft > 0 ? leaseAmount / sqft : 0;
+  const targetPctForTuition = tuition >= 65000 ? 20 : tuition > 40000 ? 10 : 5;
 
   const scenarios = [
-    { students: 15, label: '15 students' },
-    { students: 25, label: '25 students' },
-    { students: 40, label: '40 students' },
-    { students: 60, label: '60 students' },
-  ].map((s) => ({
-    ...s,
-    costPerStudent: totalFixed / s.students,
-    pctOfTuition: (totalFixed / (s.students * tuition)) * 100,
-  }));
+    { students: Math.floor(capacity * 0.25), label: `${Math.floor(capacity * 0.25)} (25%)` },
+    { students: Math.floor(capacity * 0.50), label: `${Math.floor(capacity * 0.50)} (50%)` },
+    { students: Math.floor(capacity * 0.75), label: `${Math.floor(capacity * 0.75)} (75%)` },
+    { students: capacity, label: `${capacity} (100%)` },
+  ].map((s) => {
+    const revenue = s.students * tuition;
+    const costPerStudent = s.students > 0 ? totalFixed / s.students : 0;
+    const pctOfTuition = s.students > 0 ? (totalFixed / revenue) * 100 : 0;
+    const margin = revenue - totalFixed;
+    return { ...s, revenue, costPerStudent, pctOfTuition, margin };
+  });
+
+  // Portfolio impact
+  const portfolioCurrentCost = summary?.grandTotal ?? 0;
+  const portfolioCurrentEnrollment = summary?.totalEnrollment ?? 0;
+  const portfolioCurrentCapacity = summary?.totalCapacity ?? 0;
+  const newPortfolioCost = portfolioCurrentCost + totalFixed;
+  const atCapacityRevenue = capacity * tuition;
+  const newPortfolioRevenueAtCap = (summary?.totalRevenueAtCapacity ?? 0) + atCapacityRevenue;
+  const newPortfolioCapacity = portfolioCurrentCapacity + capacity;
+  const newFacPctAtCapacity = newPortfolioRevenueAtCap > 0 ? (newPortfolioCost / newPortfolioRevenueAtCap) * 100 : 0;
+
+  // Comparable check: Alpha Palm Beach
+  const breakEvenStudents = Math.ceil(totalFixed / (targetPctForTuition / 100 * tuition));
+  const canReachTarget = breakEvenStudents <= capacity;
 
   return (
-    <div className="bg-white rounded-lg shadow p-6 mb-6">
-      <h3 className="font-semibold text-gray-800 mb-4">New School Economics Calculator</h3>
-      <p className="text-sm text-gray-500 mb-4">
-        Before signing a lease, understand your fixed cost burden at different enrollments.
-      </p>
-
-      <div className="grid grid-cols-2 md:grid-cols-5 gap-4 mb-6">
-        <div>
-          <label className="block text-xs text-gray-500 mb-1">Annual Lease</label>
-          <input
-            type="number"
-            value={leaseAmount}
-            onChange={(e) => setLeaseAmount(Number(e.target.value))}
-            className="w-full border rounded px-3 py-2 text-sm"
-            step={10000}
-          />
-        </div>
-        <div>
-          <label className="block text-xs text-gray-500 mb-1">Tuition</label>
-          <input
-            type="number"
-            value={tuition}
-            onChange={(e) => setTuition(Number(e.target.value))}
-            className="w-full border rounded px-3 py-2 text-sm"
-            step={5000}
-          />
-        </div>
-        <div>
-          <label className="block text-xs text-gray-500 mb-1">Other Fixed (% of lease)</label>
-          <input
-            type="number"
-            value={fixedFacilitiesPct}
-            onChange={(e) => setFixedFacilitiesPct(Number(e.target.value))}
-            className="w-full border rounded px-3 py-2 text-sm"
-            step={5}
-          />
-        </div>
-        <div>
-          <label className="block text-xs text-gray-500 mb-1">CapEx Buildout</label>
-          <input
-            type="number"
-            value={capexBuildout}
-            onChange={(e) => setCapexBuildout(Number(e.target.value))}
-            className="w-full border rounded px-3 py-2 text-sm"
-            step={25000}
-          />
-        </div>
-        <div>
-          <label className="block text-xs text-gray-500 mb-1">Amort. Years</label>
-          <input
-            type="number"
-            value={amortYears}
-            onChange={(e) => setAmortYears(Math.max(1, Number(e.target.value)))}
-            className="w-full border rounded px-3 py-2 text-sm"
-            step={1}
-            min={1}
-          />
+    <div className="table-card rounded-xl overflow-hidden mb-6">
+      <div className="px-5 py-4 bg-slate-800">
+        <div className="flex items-center justify-between">
+          <div>
+            <h3 className="font-bold text-slate-100 text-lg">Deal Evaluation</h3>
+            <p className="text-sm text-slate-300 mt-0.5">
+              Before signing: What does this deal cost the portfolio? What&apos;s the exit?
+            </p>
+          </div>
+          <div className="text-xs text-slate-500">Andy rule: no lease without a model</div>
         </div>
       </div>
 
-      <div className="text-sm text-gray-600 mb-4">
-        Total Annual Fixed: <strong>{formatCurrency(totalFixed)}</strong> (Lease +{' '}
-        {fixedFacilitiesPct}% other + {formatCurrency(annualDepreciation)}/yr depreciation)
+      <div className="p-5">
+        {/* Deal name */}
+        <div className="mb-5">
+          <label className="block text-xs font-medium text-slate-400 mb-1">Deal Name / Address</label>
+          <input type="text" value={dealName} onChange={(e) => setDealName(e.target.value)} className="w-full border border-slate-600 rounded px-3 py-2 text-sm bg-slate-800 text-white font-medium" placeholder="e.g. Boca Raton — 2200 NW 5th Ave" />
+        </div>
+
+        {/* Input grid */}
+        <div className="grid grid-cols-3 md:grid-cols-5 gap-4 mb-6">
+        <div>
+            <label className="block text-xs text-slate-400 mb-1">Annual Lease</label>
+          <input type="number" value={leaseAmount} onChange={(e) => setLeaseAmount(Number(e.target.value))} className="w-full border border-slate-600 rounded px-3 py-2 text-sm bg-slate-800 text-white" step={10000} />
+        </div>
+        <div>
+            <label className="block text-xs text-slate-400 mb-1">Tuition</label>
+          <input type="number" value={tuition} onChange={(e) => setTuition(Number(e.target.value))} className="w-full border border-slate-600 rounded px-3 py-2 text-sm bg-slate-800 text-white" step={5000} />
+        </div>
+        <div>
+            <label className="block text-xs text-slate-400 mb-1">Capacity (seats)</label>
+            <input type="number" value={capacity} onChange={(e) => setCapacity(Math.max(1, Number(e.target.value)))} className="w-full border border-slate-600 rounded px-3 py-2 text-sm bg-slate-800 text-white" step={5} min={1} />
+        </div>
+        <div>
+            <label className="block text-xs text-slate-400 mb-1">Sq Ft</label>
+            <input type="number" value={sqft} onChange={(e) => setSqft(Number(e.target.value))} className="w-full border border-slate-600 rounded px-3 py-2 text-sm bg-slate-800 text-white" step={500} />
+        </div>
+        <div>
+            <label className="block text-xs text-slate-400 mb-1">Other Fixed (% of lease)</label>
+          <input type="number" value={fixedFacilitiesPct} onChange={(e) => setFixedFacilitiesPct(Number(e.target.value))} className="w-full border border-slate-600 rounded px-3 py-2 text-sm bg-slate-800 text-white" step={5} />
+        </div>
+        <div>
+            <label className="block text-xs text-slate-400 mb-1">CapEx Buildout</label>
+          <input type="number" value={capexBuildout} onChange={(e) => setCapexBuildout(Number(e.target.value))} className="w-full border border-slate-600 rounded px-3 py-2 text-sm bg-slate-800 text-white" step={25000} />
+        </div>
+        <div>
+            <label className="block text-xs text-slate-400 mb-1">Amort. Years</label>
+          <input type="number" value={amortYears} onChange={(e) => setAmortYears(Math.max(1, Number(e.target.value)))} className="w-full border border-slate-600 rounded px-3 py-2 text-sm bg-slate-800 text-white" step={1} min={1} />
+        </div>
+          <div>
+            <label className="block text-xs text-slate-400 mb-1">Lease Term (yrs)</label>
+            <input type="number" value={leaseTerm} onChange={(e) => setLeaseTerm(Math.max(1, Number(e.target.value)))} className="w-full border border-slate-600 rounded px-3 py-2 text-sm bg-slate-800 text-white" step={1} min={1} />
+          </div>
+          <div>
+            <label className="block text-xs text-slate-400 mb-1">Early Walk (yrs)</label>
+            <input type="number" value={earlyWalkYears} onChange={(e) => setEarlyWalkYears(Math.max(0, Number(e.target.value)))} className="w-full border border-slate-600 rounded px-3 py-2 text-sm bg-slate-800 text-white" step={1} min={0} />
+        </div>
       </div>
 
-      <table className="w-full text-sm">
+        {/* Commitment & Risk KPIs */}
+        <div className="grid grid-cols-2 md:grid-cols-5 gap-3 mb-6">
+          <div className="bg-blue-900/30 border border-blue-700 rounded-lg p-3 text-center">
+            <div className="text-xs text-blue-300 font-medium">Annual Fixed Cost</div>
+            <div className="text-lg font-bold text-blue-900">{formatCurrency(totalFixed)}</div>
+          </div>
+          <div className="bg-amber-900/30 border border-amber-700 rounded-lg p-3 text-center">
+            <div className="text-xs text-amber-300 font-medium">Total Commitment</div>
+            <div className="text-lg font-bold text-amber-900">{formatCurrency(totalCommitment)}</div>
+            <div className="text-[10px] text-amber-600">{leaseTerm}yr lease + buildout</div>
+          </div>
+          <div className="bg-red-900/30 border border-red-700 rounded-lg p-3 text-center">
+            <div className="text-xs text-red-400 font-medium">Early Walk Exposure</div>
+            <div className="text-lg font-bold text-red-900">{formatCurrency(earlyWalkExposure)}</div>
+            <div className="text-[10px] text-red-400">{earlyWalkYears}yr lease + buildout</div>
+          </div>
+          <div className="bg-slate-800/60 border border-slate-600 rounded-lg p-3 text-center">
+            <div className="text-xs text-slate-600 font-medium">Lease / Sq Ft</div>
+            <div className="text-lg font-bold text-slate-900">${leasePerSqft.toFixed(2)}</div>
+            <div className="text-[10px] text-slate-400">Portfolio avg: ${summary ? summary.avgLeasePerSqft.toFixed(2) : '—'}</div>
+          </div>
+          <div className="bg-green-900/30 border border-green-700 rounded-lg p-3 text-center">
+            <div className="text-xs text-green-400 font-medium">Break-Even</div>
+            <div className="text-lg font-bold text-green-900">{breakEvenStudents} students</div>
+            <div className={`text-[10px] ${canReachTarget ? 'text-green-400' : 'text-red-400'}`}>
+              for {targetPctForTuition}% target | {canReachTarget ? 'Achievable' : 'EXCEEDS CAPACITY'}
+            </div>
+          </div>
+      </div>
+
+        {/* Enrollment Scenarios */}
+        <table className="w-full text-sm mb-6">
         <thead className="bg-gray-50">
           <tr>
             <th className="px-3 py-2 text-left">Enrollment</th>
+              <th className="px-3 py-2 text-right">Revenue</th>
             <th className="px-3 py-2 text-right">$/Student</th>
             <th className="px-3 py-2 text-right">% of Tuition</th>
+              <th className="px-3 py-2 text-right">Margin</th>
             <th className="px-3 py-2 text-left">Verdict</th>
           </tr>
         </thead>
@@ -425,612 +302,80 @@ const NewSchoolCalculator: React.FC = () => {
           {scenarios.map((s) => (
             <tr key={s.students}>
               <td className="px-3 py-2">{s.label}</td>
+                <td className="px-3 py-2 text-right text-green-400">{formatCurrency(s.revenue)}</td>
               <td className="px-3 py-2 text-right">{formatCurrency(s.costPerStudent)}</td>
               <td className="px-3 py-2 text-right font-medium">{s.pctOfTuition.toFixed(1)}%</td>
+                <td className={`px-3 py-2 text-right font-medium ${s.margin >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                  {s.margin >= 0 ? '+' : ''}{formatCurrency(s.margin)}
+                </td>
               <td className="px-3 py-2">
-                <span
-                  className={`px-2 py-0.5 rounded text-xs ${
-                    s.pctOfTuition <= 15
+                  <span className={`px-2 py-0.5 rounded text-xs ${
+                    s.pctOfTuition <= targetPctForTuition
                       ? 'bg-green-100 text-green-800'
-                      : s.pctOfTuition <= 20
+                      : s.pctOfTuition <= targetPctForTuition * 1.5
                         ? 'bg-blue-100 text-blue-800'
-                        : s.pctOfTuition <= 30
+                        : s.pctOfTuition <= targetPctForTuition * 2.5
                           ? 'bg-amber-100 text-amber-800'
                           : 'bg-red-100 text-red-800'
-                  }`}
-                >
-                  {s.pctOfTuition <= 15
-                    ? '✓ Target'
-                    : s.pctOfTuition <= 20
-                      ? 'Acceptable'
-                      : s.pctOfTuition <= 30
-                        ? 'Warning'
-                        : '✗ Too High'}
+                  }`}>
+                    {s.pctOfTuition <= targetPctForTuition ? 'At Target' : s.pctOfTuition <= targetPctForTuition * 1.5 ? 'Acceptable' : s.pctOfTuition <= targetPctForTuition * 2.5 ? 'Warning' : 'Too High'}
                 </span>
               </td>
             </tr>
           ))}
         </tbody>
       </table>
-    </div>
-  );
-};
 
-// ============================================================================
-// SEGMENT SUMMARY TABLE
-// ============================================================================
-
-const SegmentTable: React.FC<{
-  title: string;
-  segments: SegmentSummary[];
-  onSelectSegment: (schools: SchoolData[]) => void;
-}> = ({ title, segments, onSelectSegment }) => {
-  return (
-    <div className="bg-white rounded-lg shadow overflow-hidden">
-      <div className="px-4 py-3 border-b bg-gray-50">
-        <h3 className="font-semibold text-gray-800">{title}</h3>
+        {/* Portfolio Impact */}
+        {summary && (
+          <div className="bg-slate-800/60 border border-slate-700 rounded-lg p-4">
+            <h4 className="font-semibold text-white mb-3">Portfolio Impact</h4>
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
+              <div>
+                <div className="text-xs text-slate-400">Current Portfolio Cost</div>
+                <div className="font-medium">{formatCurrency(portfolioCurrentCost)}</div>
+                <div className="text-xs text-slate-500 mt-1">After this deal</div>
+                <div className="font-bold">{formatCurrency(newPortfolioCost)}</div>
+                <div className="text-xs text-red-500">+{formatCurrency(totalFixed)} ({(totalFixed / portfolioCurrentCost * 100).toFixed(1)}%)</div>
       </div>
-      <div className="overflow-x-auto">
-        <table className="min-w-full text-sm">
-          <thead className="bg-gray-50 border-b">
-            <tr>
-              <th className="px-3 py-2 text-left text-xs font-medium text-gray-500">Segment</th>
-              <th className="px-3 py-2 text-center text-xs font-medium text-gray-500">Schools</th>
-              <th className="px-3 py-2 text-center text-xs font-medium text-gray-500">
-                Enrollment
-              </th>
-              <th className="px-3 py-2 text-center text-xs font-medium text-gray-500">
-                Utilization
-              </th>
-              <th className="px-3 py-2 text-right text-xs font-medium text-gray-500">
-                Total Costs
-              </th>
-              <th className="px-3 py-2 text-right text-xs font-medium text-gray-500">$/Student</th>
-              <th className="px-3 py-2 text-right text-xs font-medium text-gray-500">% Tuition</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-gray-200">
-            {segments.map((seg) => (
-              <tr
-                key={seg.segment}
-                className="hover:bg-gray-50 cursor-pointer"
-                onClick={() => onSelectSegment(seg.schools)}
-              >
-                <td className="px-3 py-2 font-medium">{seg.segment}</td>
-                <td className="px-3 py-2 text-center">{seg.schoolCount}</td>
-                <td className="px-3 py-2 text-center">
-                  {seg.totalEnrollment} / {seg.totalCapacity}
-                </td>
-                <td className="px-3 py-2 text-center">
-                  <span
-                    className={`px-2 py-0.5 rounded text-xs ${
-                      seg.utilizationPct >= 70
-                        ? 'bg-green-100 text-green-800'
-                        : seg.utilizationPct >= 50
-                          ? 'bg-amber-100 text-amber-800'
-                          : 'bg-red-100 text-red-800'
-                    }`}
-                  >
-                    {seg.utilizationPct.toFixed(0)}%
-                  </span>
-                </td>
-                <td className="px-3 py-2 text-right font-medium">
-                  {formatCurrency(seg.totalCosts)}
-                </td>
-                <td className="px-3 py-2 text-right">
-                  {formatCurrency(seg.avgCostPerStudent)}
-                </td>
-                <td className="px-3 py-2 text-right">
-                  <span
-                    className={`font-medium ${
-                      seg.avgPctOfTuition > 30
-                        ? 'text-red-600'
-                        : seg.avgPctOfTuition > 20
-                          ? 'text-amber-600'
-                          : 'text-green-600'
-                    }`}
-                  >
-                    {seg.avgPctOfTuition.toFixed(1)}%
-                  </span>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+              <div>
+                <div className="text-xs text-slate-400">Capacity</div>
+                <div className="font-medium">{portfolioCurrentCapacity} seats</div>
+                <div className="text-xs text-slate-500 mt-1">After this deal</div>
+                <div className="font-bold">{newPortfolioCapacity} seats</div>
+                <div className="text-xs text-blue-500">+{capacity} seats</div>
       </div>
+              <div>
+                <div className="text-xs text-slate-400">Current Utilization</div>
+                <div className="font-medium">{summary.avgUtilization.toFixed(0)}%</div>
+                <div className="text-xs text-slate-500 mt-1">After (0 enrolled)</div>
+                <div className="font-bold text-red-400">{newPortfolioCapacity > 0 ? ((portfolioCurrentEnrollment / newPortfolioCapacity) * 100).toFixed(0) : 0}%</div>
+                <div className="text-xs text-red-500">Diluted by empty seats</div>
     </div>
-  );
-};
+              <div>
+                <div className="text-xs text-slate-400">Fac % at Full Capacity</div>
+                <div className="font-medium">{summary.totalRevenueAtCapacity > 0 ? ((portfolioCurrentCost / summary.totalRevenueAtCapacity) * 100).toFixed(0) : 0}% today</div>
+                <div className="text-xs text-slate-500 mt-1">With this school at cap</div>
+                <div className="font-bold">{newFacPctAtCapacity.toFixed(0)}%</div>
+      </div>
+      </div>
 
-// ============================================================================
-// SCENARIO SLIDER
-// ============================================================================
-
-const ScenarioSlider: React.FC<{
-  value: number;
-  onChange: (val: number) => void;
-  scenario: ScenarioResult;
-  currentSummary: PortfolioSummary;
-}> = ({ value, onChange, scenario, currentSummary }) => {
-  const improvementPct =
-    currentSummary.avgCostPerStudent > 0
-      ? ((currentSummary.avgCostPerStudent - scenario.avgCostPerStudent) /
-          currentSummary.avgCostPerStudent) *
-        100
-      : 0;
-
-  return (
-    <div className="bg-gradient-to-r from-blue-50 to-green-50 rounded-lg shadow p-4">
-      <div className="flex justify-between items-center mb-3">
-        <h3 className="font-semibold text-gray-800">
-          Scenario: What if we hit {value}% capacity?
-        </h3>
-        <div className="text-sm text-gray-500">
-          Current: {currentSummary.avgUtilization.toFixed(0)}%
+            {/* Decision Box */}
+            <div className={`mt-4 p-3 rounded-lg border ${canReachTarget ? 'bg-green-900/30 border-green-700' : 'bg-red-900/30 border-red-700'}`}>
+              <div className="font-medium text-sm">
+                {canReachTarget ? (
+                  <>&#9989; This deal can reach the {targetPctForTuition}% target at {breakEvenStudents}/{capacity} capacity. Early-walk exposure: {formatCurrency(earlyWalkExposure)}.</>
+                ) : (
+                  <>&#10060; This deal CANNOT reach the {targetPctForTuition}% target — needs {breakEvenStudents} students but capacity is only {capacity}. Do not sign without renegotiating lease or reducing scope.</>
+                )}
         </div>
-      </div>
-
-      <input
-        type="range"
-        min="50"
-        max="100"
-        step="5"
-        value={value}
-        onChange={(e) => onChange(Number(e.target.value))}
-        className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer"
-      />
-
-      <div className="flex justify-between text-xs text-gray-400 mb-4">
-        <span>50%</span>
-        <span>75%</span>
-        <span>100%</span>
-      </div>
-
-      <div className="grid grid-cols-4 gap-4">
-        <div className="bg-white rounded p-3">
-          <div className="text-xs text-gray-500">Total Enrollment</div>
-          <div className="text-lg font-bold">{scenario.totalEnrollment}</div>
-          <div className="text-xs text-green-600">
-            +{scenario.totalEnrollment - currentSummary.totalEnrollment} students
+              <div className="text-xs text-slate-400 mt-2">
+                Existing portfolio has {summary.totalCapacity - summary.totalEnrollment} empty seats at {summary.avgUtilization.toFixed(0)}% utilization. Consider filling those first.
+        </div>
+        </div>
           </div>
-        </div>
-        <div className="bg-white rounded p-3">
-          <div className="text-xs text-gray-500">$/Student</div>
-          <div className="text-lg font-bold">{formatCurrency(scenario.avgCostPerStudent)}</div>
-          <div className="text-xs text-green-600">
-            ↓ {formatCurrency(scenario.savingsVsCurrent)} saved
-          </div>
-        </div>
-        <div className="bg-white rounded p-3">
-          <div className="text-xs text-gray-500">% of Tuition</div>
-          <div className="text-lg font-bold">{scenario.avgPctOfTuition.toFixed(1)}%</div>
-          <div className="text-xs text-green-600">
-            {scenario.avgPctOfTuition <= 15 ? '✓ At target' : `↓ toward 15% target`}
-          </div>
-        </div>
-        <div className="bg-white rounded p-3">
-          <div className="text-xs text-gray-500">Efficiency Gain</div>
-          <div className="text-lg font-bold text-green-600">+{improvementPct.toFixed(0)}%</div>
-          <div className="text-xs text-gray-500">per-student cost reduction</div>
-        </div>
+        )}
       </div>
-    </div>
-  );
-};
-
-// ============================================================================
-// SQ FT EFFICIENCY TABLE
-// ============================================================================
-
-const SqftEfficiencyTable: React.FC<{ schools: SchoolData[] }> = ({ schools }) => {
-  const sortedByEfficiency = [...schools].sort(
-    (a, b) => a.metrics.costPerSqft - b.metrics.costPerSqft
-  );
-
-  return (
-    <div className="bg-white rounded-lg shadow overflow-hidden">
-      <div className="px-4 py-3 border-b bg-gray-50">
-        <h3 className="font-semibold text-gray-800">Space Efficiency Analysis ($/sq ft)</h3>
-        <p className="text-xs text-gray-500 mt-1">Lower $/sq ft = more efficient use of space</p>
-      </div>
-      <div className="overflow-x-auto">
-        <table className="min-w-full text-sm">
-          <thead className="bg-gray-50 border-b">
-            <tr>
-              <th className="px-3 py-2 text-left text-xs font-medium text-gray-500">School</th>
-              <th className="px-3 py-2 text-center text-xs font-medium text-gray-500">Sq Ft</th>
-              <th className="px-3 py-2 text-center text-xs font-medium text-gray-500">
-                Sq Ft / Student
-              </th>
-              <th className="px-3 py-2 text-right text-xs font-medium text-gray-500">
-                Lease/sq ft
-              </th>
-              <th className="px-3 py-2 text-right text-xs font-medium text-gray-500">
-                Total/sq ft
-              </th>
-              <th className="px-3 py-2 text-left text-xs font-medium text-gray-500">Efficiency</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-gray-200">
-            {sortedByEfficiency.map((school, idx) => {
-              const efficiency =
-                school.metrics.costPerSqft < 50
-                  ? 'Excellent'
-                  : school.metrics.costPerSqft < 80
-                    ? 'Good'
-                    : school.metrics.costPerSqft < 120
-                      ? 'Fair'
-                      : 'Poor';
-              const effColor =
-                school.metrics.costPerSqft < 50
-                  ? 'bg-green-100 text-green-800'
-                  : school.metrics.costPerSqft < 80
-                    ? 'bg-blue-100 text-blue-800'
-                    : school.metrics.costPerSqft < 120
-                      ? 'bg-amber-100 text-amber-800'
-                      : 'bg-red-100 text-red-800';
-
-              return (
-                <tr key={school.id} className="hover:bg-gray-50">
-                  <td className="px-3 py-2">
-                    <div className="font-medium">{school.displayName}</div>
-                    <div className="text-xs text-gray-500">
-                      {schoolTypeLabels[school.schoolType]}
-                    </div>
-                  </td>
-                  <td className="px-3 py-2 text-center">{school.sqft.toLocaleString()}</td>
-                  <td className="px-3 py-2 text-center">
-                    <span className={school.sqftPerStudent > 200 ? 'text-amber-600' : ''}>
-                      {school.sqftPerStudent.toFixed(0)}
-                    </span>
-                  </td>
-                  <td className="px-3 py-2 text-right">
-                    ${school.metrics.leasePerSqft.toFixed(2)}
-                  </td>
-                  <td className="px-3 py-2 text-right font-medium">
-                    ${school.metrics.costPerSqft.toFixed(2)}
-                  </td>
-                  <td className="px-3 py-2">
-                    <span className={`px-2 py-0.5 rounded text-xs ${effColor}`}>
-                      #{idx + 1} {efficiency}
-                    </span>
-                  </td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
-      </div>
-    </div>
-  );
-};
-
-// ============================================================================
-// BREAK-EVEN TABLE
-// ============================================================================
-
-const BreakevenTable: React.FC<{ schools: SchoolData[] }> = ({ schools }) => {
-  return (
-    <div className="bg-white rounded-lg shadow overflow-hidden">
-      <div className="px-4 py-3 border-b bg-gray-50">
-        <h3 className="font-semibold text-gray-800">Break-Even Analysis</h3>
-        <p className="text-xs text-gray-500 mt-1">
-          Students needed to reach target facilities % of tuition
-        </p>
-      </div>
-      <div className="overflow-x-auto">
-        <table className="min-w-full text-sm">
-          <thead className="bg-gray-50 border-b">
-            <tr>
-              <th className="px-3 py-2 text-left text-xs font-medium text-gray-500">School</th>
-              <th className="px-3 py-2 text-center text-xs font-medium text-gray-500">Current</th>
-              <th className="px-3 py-2 text-center text-xs font-medium text-gray-500">
-                Need for 20%
-              </th>
-              <th className="px-3 py-2 text-center text-xs font-medium text-gray-500">
-                Need for 15%
-              </th>
-              <th className="px-3 py-2 text-center text-xs font-medium text-gray-500">
-                @ 75% Cap
-              </th>
-              <th className="px-3 py-2 text-center text-xs font-medium text-gray-500">
-                @ 100% Cap
-              </th>
-              <th className="px-3 py-2 text-center text-xs font-medium text-gray-500">
-                Gap to 15%
-              </th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-gray-200">
-            {schools.map((school) => {
-              const gapTo15 = school.breakeven.studentsFor15Pct - school.currentEnrollment;
-              const canReach15 = school.breakeven.studentsFor15Pct <= school.capacity;
-              const canReach20 = school.breakeven.studentsFor20Pct <= school.capacity;
-
-              return (
-                <tr key={school.id} className="hover:bg-gray-50">
-                  <td className="px-3 py-2">
-                    <div className="font-medium">{school.displayName}</div>
-                    <div className="text-xs text-gray-500">
-                      ${school.tuition.toLocaleString()} tuition
-                    </div>
-                  </td>
-                  <td className="px-3 py-2 text-center">
-                    <div>
-                      {school.currentEnrollment} / {school.capacity}
-                    </div>
-                    <div
-                      className={`text-xs font-medium ${
-                        school.metrics.pctOfTuitionCurrent > 30
-                          ? 'text-red-600'
-                          : school.metrics.pctOfTuitionCurrent > 20
-                            ? 'text-amber-600'
-                            : 'text-green-600'
-                      }`}
-                    >
-                      {school.metrics.pctOfTuitionCurrent.toFixed(0)}%
-                    </div>
-                  </td>
-                  <td className="px-3 py-2 text-center">
-                    <span className={canReach20 ? 'text-green-600' : 'text-red-600'}>
-                      {school.breakeven.studentsFor20Pct}
-                    </span>
-                    {!canReach20 && <span className="text-xs text-red-500 ml-1">!</span>}
-                  </td>
-                  <td className="px-3 py-2 text-center">
-                    <span className={canReach15 ? 'text-green-600' : 'text-red-600'}>
-                      {school.breakeven.studentsFor15Pct}
-                    </span>
-                    {!canReach15 && <span className="text-xs text-red-500 ml-1">!</span>}
-                  </td>
-                  <td className="px-3 py-2 text-center">
-                    <span
-                      className={
-                        school.breakeven.pctAt75Capacity <= 20
-                          ? 'text-green-600'
-                          : 'text-amber-600'
-                      }
-                    >
-                      {school.breakeven.pctAt75Capacity.toFixed(0)}%
-                    </span>
-                  </td>
-                  <td className="px-3 py-2 text-center">
-                    <span
-                      className={
-                        school.breakeven.pctAt100Capacity <= 15
-                          ? 'text-green-600'
-                          : 'text-amber-600'
-                      }
-                    >
-                      {school.breakeven.pctAt100Capacity.toFixed(0)}%
-                    </span>
-                  </td>
-                  <td className="px-3 py-2 text-center">
-                    {gapTo15 > 0 ? (
-                      <span
-                        className={`px-2 py-1 rounded text-xs ${
-                          gapTo15 > school.capacity - school.currentEnrollment
-                            ? 'bg-red-100 text-red-700'
-                            : 'bg-amber-100 text-amber-700'
-                        }`}
-                      >
-                        +{gapTo15} students
-                      </span>
-                    ) : (
-                      <span className="px-2 py-1 rounded text-xs bg-green-100 text-green-700">
-                        ✓ Achieved
-                      </span>
-                    )}
-                  </td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
-      </div>
-    </div>
-  );
-};
-
-// ============================================================================
-// CAPEX & BUDGET TAB
-// ============================================================================
-
-const CapExBudgetTab: React.FC<{ schools: SchoolData[]; summary: PortfolioSummary }> = ({
-  schools,
-  summary,
-}) => {
-  const sortedByDelta = [...schools].sort(
-    (a, b) => Math.abs(b.budget.delta) - Math.abs(a.budget.delta)
-  );
-  const sortedByCapex = [...schools].sort(
-    (a, b) => b.costs.capexBuildout - a.costs.capexBuildout
-  );
-
-  return (
-    <div className="space-y-6">
-      {/* CapEx Summary KPIs */}
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-        <MetricCard
-          title="Total CapEx Buildout"
-          value={formatCurrency(summary.totalCapexBuildout)}
-          subtitle="One-time capital expenditure"
-          color="red"
-        />
-        <MetricCard
-          title="Annual Depreciation"
-          value={formatCurrency(summary.totalAnnualDepreciation)}
-          subtitle="Amortized annual cost"
-          color="slate"
-        />
-        <MetricCard
-          title="Avg CapEx / School"
-          value={formatCurrency(summary.totalCapexBuildout / Math.max(summary.totalSchools, 1))}
-          subtitle={`${summary.totalSchools} schools`}
-        />
-        <MetricCard
-          title="CapEx / Student (at capacity)"
-          value={formatCurrency(summary.totalCapexBuildout / Math.max(summary.totalCapacity, 1))}
-          subtitle="One-time cost per seat"
-        />
-      </div>
-
-      {/* Budget vs Actual */}
-      <div className="bg-white rounded-lg shadow overflow-hidden">
-        <div className="px-4 py-3 border-b bg-gray-50">
-          <h3 className="font-semibold text-gray-800">Budget vs Actual (Cost per Student)</h3>
-          <p className="text-xs text-gray-500 mt-1">
-            Model cost per student vs actual cost per student at capacity. Delta shows
-            over/under budget.
-          </p>
-        </div>
-        <div className="overflow-x-auto">
-          <table className="min-w-full text-sm">
-            <thead className="bg-gray-50 border-b">
-              <tr>
-                <th className="px-3 py-2 text-left text-xs font-medium text-gray-500">School</th>
-                <th className="px-3 py-2 text-right text-xs font-medium text-gray-500">
-                  Model $/Student
-                </th>
-                <th className="px-3 py-2 text-right text-xs font-medium text-gray-500">
-                  Actual $/Student
-                </th>
-                <th className="px-3 py-2 text-right text-xs font-medium text-gray-500">Delta</th>
-                <th className="px-3 py-2 text-right text-xs font-medium text-gray-500">
-                  Delta %
-                </th>
-                <th className="px-3 py-2 text-center text-xs font-medium text-gray-500">Status</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-gray-200">
-              {sortedByDelta.map((school) => {
-                const isOver = school.budget.delta > 0;
-                return (
-                  <tr key={school.id} className="hover:bg-gray-50">
-                    <td className="px-3 py-2">
-                      <div className="font-medium">{school.displayName}</div>
-                      <div className="text-xs text-gray-500">
-                        {schoolTypeLabels[school.schoolType]}
-                      </div>
-                    </td>
-                    <td className="px-3 py-2 text-right">
-                      {formatCurrency(school.budget.modelCostPerStudent)}
-                    </td>
-                    <td className="px-3 py-2 text-right font-medium">
-                      {formatCurrency(school.budget.actualCostPerStudent)}
-                    </td>
-                    <td
-                      className={`px-3 py-2 text-right font-medium ${isOver ? 'text-red-600' : 'text-green-600'}`}
-                    >
-                      {isOver ? '+' : ''}
-                      {formatCurrency(school.budget.delta)}
-                    </td>
-                    <td
-                      className={`px-3 py-2 text-right ${isOver ? 'text-red-600' : 'text-green-600'}`}
-                    >
-                      {isOver ? '+' : ''}
-                      {school.budget.deltaPct.toFixed(0)}%
-                    </td>
-                    <td className="px-3 py-2 text-center">
-                      <span
-                        className={`px-2 py-0.5 rounded text-xs ${
-                          Math.abs(school.budget.deltaPct) <= 10
-                            ? 'bg-green-100 text-green-800'
-                            : Math.abs(school.budget.deltaPct) <= 25
-                              ? 'bg-amber-100 text-amber-800'
-                              : 'bg-red-100 text-red-800'
-                        }`}
-                      >
-                        {Math.abs(school.budget.deltaPct) <= 10
-                          ? 'On Track'
-                          : Math.abs(school.budget.deltaPct) <= 25
-                            ? 'Watch'
-                            : isOver
-                              ? 'Over Budget'
-                              : 'Under Budget'}
-                      </span>
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
-      </div>
-
-      {/* CapEx Buildout Schedule */}
-      <div className="bg-white rounded-lg shadow overflow-hidden">
-        <div className="px-4 py-3 border-b bg-gray-50">
-          <h3 className="font-semibold text-gray-800">CapEx Buildout by School</h3>
-          <p className="text-xs text-gray-500 mt-1">
-            One-time capital expenditure and annual depreciation impact
-          </p>
-        </div>
-        <div className="overflow-x-auto">
-          <table className="min-w-full text-sm">
-            <thead className="bg-gray-50 border-b">
-              <tr>
-                <th className="px-3 py-2 text-left text-xs font-medium text-gray-500">School</th>
-                <th className="px-3 py-2 text-right text-xs font-medium text-gray-500">
-                  CapEx Buildout
-                </th>
-                <th className="px-3 py-2 text-right text-xs font-medium text-gray-500">
-                  Annual Depr.
-                </th>
-                <th className="px-3 py-2 text-right text-xs font-medium text-gray-500">
-                  Depr. / Student
-                </th>
-                <th className="px-3 py-2 text-center text-xs font-medium text-gray-500">
-                  Capacity
-                </th>
-                <th className="px-3 py-2 text-right text-xs font-medium text-gray-500">
-                  CapEx / Seat
-                </th>
-                <th className="px-3 py-2 text-left text-xs font-medium text-gray-500">
-                  Buildout Bar
-                </th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-gray-200">
-              {sortedByCapex.map((school) => {
-                const maxCapex = sortedByCapex[0]?.costs.capexBuildout || 1;
-                const barWidth = (school.costs.capexBuildout / maxCapex) * 100;
-                const capexPerSeat = school.costs.capexBuildout / Math.max(school.capacity, 1);
-                const deprPerStudent =
-                  school.costs.annualDepreciation.total / Math.max(school.capacity, 1);
-
-                return (
-                  <tr key={school.id} className="hover:bg-gray-50">
-                    <td className="px-3 py-2">
-                      <div className="font-medium">{school.displayName}</div>
-                    </td>
-                    <td className="px-3 py-2 text-right font-medium text-red-700">
-                      {formatCurrency(school.costs.capexBuildout)}
-                    </td>
-                    <td className="px-3 py-2 text-right text-slate-700">
-                      {formatCurrency(school.costs.annualDepreciation.total)}
-                    </td>
-                    <td className="px-3 py-2 text-right">{formatCurrency(deprPerStudent)}</td>
-                    <td className="px-3 py-2 text-center">{school.capacity}</td>
-                    <td className="px-3 py-2 text-right">{formatCurrency(capexPerSeat)}</td>
-                    <td className="px-3 py-2 w-32">
-                      <div className="h-3 bg-gray-100 rounded overflow-hidden">
-                        <div
-                          className="h-full bg-red-500 rounded"
-                          style={{ width: `${barWidth}%` }}
-                        />
-                      </div>
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
-      </div>
-
-      {/* New School Calculator */}
-      <NewSchoolCalculator />
     </div>
   );
 };
@@ -1040,25 +385,29 @@ const CapExBudgetTab: React.FC<{ schools: SchoolData[]; summary: PortfolioSummar
 // ============================================================================
 
 const FacilitiesCapexDashboard: React.FC = () => {
-  const [sortColumn, setSortColumn] = useState<keyof SchoolData | 'grandTotal'>('grandTotal');
-  const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('desc');
   const [selectedSchool, setSelectedSchool] = useState<SchoolData | null>(null);
-  const [expandedCategory, setExpandedCategory] = useState<string | null>(null);
-
   // Filters
   const [schoolTypeFilter, setSchoolTypeFilter] = useState<SchoolType | 'all'>('all');
   const [tuitionTierFilter, setTuitionTierFilter] = useState<TuitionTier | 'all'>('all');
+  const [operatingFilter, setOperatingFilter] = useState<OperatingFilter>('all');
 
   // Expense preset
   const [expensePreset, setExpensePreset] = useState<ExpensePreset>('dashboard');
 
-  // Scenario
-  const [scenarioUtilization, setScenarioUtilization] = useState(75);
+  // (Scenario slider removed — was on old segmentation tab)
 
   // View mode
-  const [activeTab, setActiveTab] = useState<
-    'overview' | 'segmentation' | 'breakeven' | 'capex-budget'
-  >('overview');
+  const [activeTab, setActiveTab] = useState<'overview' | 'segmentation' | 'breakeven' | 'capex-budget'>('overview');
+  const [overviewBasis, setOverviewBasis] = useState<'current' | 'capacity' | 'sqft'>('capacity');
+  const [showCharts, setShowCharts] = useState(false);
+
+  // Sort state for each table
+  const [overviewSort, setOverviewSort] = useState<{key: string; dir: 'asc'|'desc'}>({key: 'total', dir: 'desc'});
+  // Additional sort states can be added per tab as needed
+
+  const toggleSort = (setter: React.Dispatch<React.SetStateAction<{key:string;dir:'asc'|'desc'}>>) => (key: string) => {
+    setter(prev => prev.key === key ? {key, dir: prev.dir === 'asc' ? 'desc' : 'asc'} : {key, dir: 'desc'});
+  };
 
   const allSchools = useMemo(() => buildSchoolData(), []);
 
@@ -1067,571 +416,1216 @@ const FacilitiesCapexDashboard: React.FC = () => {
     return allSchools.filter((s) => {
       if (schoolTypeFilter !== 'all' && s.schoolType !== schoolTypeFilter) return false;
       if (tuitionTierFilter !== 'all' && s.tuitionTier !== tuitionTierFilter) return false;
+      if (operatingFilter === 'operating' && !s.isOperating) return false;
+      if (operatingFilter === 'pre-opening' && s.isOperating) return false;
       return true;
     });
-  }, [allSchools, schoolTypeFilter, tuitionTierFilter]);
+  }, [allSchools, schoolTypeFilter, tuitionTierFilter, operatingFilter]);
 
   const summary = useMemo(() => calculatePortfolioSummary(schools), [schools]);
-  const insights = useMemo(() => generateInsights(summary), [summary]);
-  const currentExpenseRules = useMemo(() => getExpenseRules(expensePreset), [expensePreset]);
 
-  // Segmentation
-  const bySchoolType = useMemo(() => aggregateBySchoolType(allSchools), [allSchools]);
-  const byTuitionTier = useMemo(() => aggregateByTuitionTier(allSchools), [allSchools]);
+  // (Segmentation + scenario removed — replaced with Budget vs Actuals tab)
 
-  // Scenario (passes preset through)
-  const scenario = useMemo(
-    () => calculateScenario(schools, scenarioUtilization, expensePreset),
-    [schools, scenarioUtilization, expensePreset]
-  );
-
+  // Schools sorted by total cost descending
   const sortedSchools = useMemo(() => {
-    return [...schools].sort((a, b) => {
-      let aVal: number;
-      let bVal: number;
+    return [...schools].sort((a, b) => b.costs.grandTotal - a.costs.grandTotal);
+  }, [schools]);
 
-      if (sortColumn === 'grandTotal') {
-        aVal = a.costs.grandTotal;
-        bVal = b.costs.grandTotal;
-      } else if (sortColumn === 'displayName') {
-        return sortDirection === 'asc'
-          ? a.displayName.localeCompare(b.displayName)
-          : b.displayName.localeCompare(a.displayName);
-      } else {
-        aVal = (a as any)[sortColumn] ?? 0;
-        bVal = (b as any)[sortColumn] ?? 0;
-      }
-
-      return sortDirection === 'desc' ? bVal - aVal : aVal - bVal;
-    });
-  }, [schools, sortColumn, sortDirection]);
-
-  const handleSort = (column: keyof SchoolData | 'grandTotal') => {
-    if (sortColumn === column) {
-      setSortDirection((d) => (d === 'asc' ? 'desc' : 'asc'));
-    } else {
-      setSortColumn(column);
-      setSortDirection('desc');
-    }
-  };
-
-  // Calculate fixed vs variable totals
-  const fixedTotal =
-    summary.totalLease + summary.totalFixedFacilities + summary.totalAnnualDepreciation;
-  const fixedPct = summary.grandTotal > 0 ? (fixedTotal / summary.grandTotal) * 100 : 0;
+  // Headline insight
+  const costVsRevenuePct = summary.totalRevenueCurrent > 0
+    ? ((summary.grandTotal / summary.totalRevenueCurrent) * 100).toFixed(0)
+    : '0';
+  const emptySeats = summary.totalCapacity - summary.totalEnrollment;
 
   return (
-    <div className="min-h-screen bg-gray-50 p-6">
+    <div className="min-h-screen bg-slate-900">
       {/* Header */}
-      <div className="mb-6">
-        <div className="flex justify-between items-start">
-          <div>
-            <h1 className="text-2xl font-bold text-gray-900">
-              Facilities & Capex Cost Analysis
-            </h1>
-            <p className="text-gray-500 mt-1">
-              Fixed real estate costs that cannot scale with enrollment
-            </p>
-            <div className="text-xs text-gray-400 mt-2">
-              Data Source: Facilities & Capex Costs spreadsheet • {summary.totalSchools} schools •
-              Year-end actuals
-            </div>
-          </div>
-
-          <div className="flex items-center gap-4">
-            {/* Expense Preset Toggle */}
-            <div>
-              <label className="block text-xs text-gray-500 mb-1">Expense Rules</label>
-              <PresetToggle preset={expensePreset} onChange={setExpensePreset} />
-            </div>
-
-            {/* Filters */}
-            <div>
-              <label className="block text-xs text-gray-500 mb-1">School Type</label>
-              <select
-                value={schoolTypeFilter}
-                onChange={(e) => setSchoolTypeFilter(e.target.value as SchoolType | 'all')}
-                className="border rounded px-3 py-1.5 text-sm"
-              >
-                <option value="all">All Types</option>
-                {Object.entries(schoolTypeLabels).map(([key, label]) => (
-                  <option key={key} value={key}>
-                    {label}
-                  </option>
-                ))}
-              </select>
-            </div>
-            <div>
-              <label className="block text-xs text-gray-500 mb-1">Tuition Tier</label>
-              <select
-                value={tuitionTierFilter}
-                onChange={(e) => setTuitionTierFilter(e.target.value as TuitionTier | 'all')}
-                className="border rounded px-3 py-1.5 text-sm"
-              >
-                <option value="all">All Tiers</option>
-                {Object.entries(tuitionTierLabels).map(([key, label]) => (
-                  <option key={key} value={key}>
-                    {label}
-                  </option>
-                ))}
-              </select>
-            </div>
-          </div>
+      <div className="bg-slate-800 px-6 py-5 text-white">
+        <div className="max-w-7xl mx-auto">
+          <div className="flex justify-between items-start">
+        <div>
+              <h1 className="text-2xl font-bold text-white">Facilities & Capex Analysis</h1>
+              <p className="text-sm text-slate-400 mt-1">{summary.totalSchools} schools | Year-end actuals | {summary.totalSqft.toLocaleString()} sq ft</p>
         </div>
-
-        {/* Tab Navigation */}
-        <div className="flex gap-1 mt-4 border-b">
-          {(
-            [
-              { id: 'overview', label: 'Overview' },
-              { id: 'segmentation', label: 'Segmentation' },
-              { id: 'breakeven', label: 'Break-Even' },
-              { id: 'capex-budget', label: 'CapEx & Budget' },
-            ] as const
-          ).map((tab) => (
-            <button
-              key={tab.id}
-              className={`px-4 py-2 text-sm font-medium rounded-t ${
-                activeTab === tab.id
-                  ? 'bg-white border border-b-white text-blue-600 -mb-px'
-                  : 'text-gray-500 hover:text-gray-700'
-              }`}
-              onClick={() => setActiveTab(tab.id)}
-            >
-              {tab.label}
-            </button>
-          ))}
+            <div className="flex items-center gap-3">
+              <OperatingToggle value={operatingFilter} onChange={setOperatingFilter} />
+              <select value={schoolTypeFilter} onChange={(e) => setSchoolTypeFilter(e.target.value as SchoolType | 'all')} className="border border-slate-600 rounded px-2 py-1.5 text-xs bg-slate-700 text-white">
+                <option value="all">All Types</option>
+                {Object.entries(schoolTypeLabels).map(([key, label]) => (<option key={key} value={key}>{label}</option>))}
+              </select>
+              <select value={tuitionTierFilter} onChange={(e) => setTuitionTierFilter(e.target.value as TuitionTier | 'all')} className="border border-slate-600 rounded px-2 py-1.5 text-xs bg-slate-700 text-white">
+                <option value="all">All Tiers</option>
+                {Object.entries(tuitionTierLabels).map(([key, label]) => (<option key={key} value={key}>{label}</option>))}
+              </select>
+              <PresetToggle preset={expensePreset} onChange={setExpensePreset} />
+          </div>
+          </div>
         </div>
       </div>
 
-      {/* SEGMENTATION TAB */}
+      {/* Tab Navigation */}
+      <div className="bg-slate-700 px-6">
+        <div className="max-w-7xl mx-auto flex gap-1">
+          {([
+            { id: 'overview', label: 'Executive View', icon: '\ud83d\udcca' },
+            { id: 'segmentation', label: 'Budget vs Actuals', icon: '\ud83d\udccb' },
+            { id: 'breakeven', label: 'Unit Economics', icon: '\ud83c\udfaf' },
+          ] as const).map((tab) => (
+              <button
+              key={tab.id}
+              className={`px-5 py-3 text-sm font-medium transition-colors border-b-2 ${
+                activeTab === tab.id
+                  ? 'border-blue-400 text-white bg-slate-600/50'
+                  : 'border-transparent text-slate-300 hover:text-white hover:border-slate-400'
+              }`}
+              onClick={() => setActiveTab(tab.id)}
+            >
+              {tab.icon} {tab.label}
+            </button>
+          ))}
+            </div>
+        </div>
+
+      <div className="max-w-7xl mx-auto px-6 py-6">
+
+      {/* BUDGET VS ACTUALS TAB */}
       {activeTab === 'segmentation' && (
         <div className="space-y-6">
-          <ScenarioSlider
-            value={scenarioUtilization}
-            onChange={setScenarioUtilization}
-            scenario={scenario}
-            currentSummary={summary}
-          />
+          {(() => {
+            const fmt = (v: number) => `$${Math.round(v).toLocaleString()}`;
+            const typeOptions: { key: SchoolType | 'all'; label: string }[] = [
+              { key: 'all', label: 'All' },
+              ...Object.entries(schoolTypeLabels).map(([k, l]) => ({ key: k as SchoolType, label: l })),
+            ];
+            const facSorted = [...schools].sort((a, b) => {
+              const capA = Math.max(a.capacity, 1); const capB = Math.max(b.capacity, 1);
+              const facVarA = (a.costs.lease.total + a.costs.fixedFacilities.total + a.costs.variableFacilities.total + a.costs.studentServices.total) - a.budget.modelFacPerStudent * capA;
+              const facVarB = (b.costs.lease.total + b.costs.fixedFacilities.total + b.costs.variableFacilities.total + b.costs.studentServices.total) - b.budget.modelFacPerStudent * capB;
+              return Math.abs(facVarB) - Math.abs(facVarA);
+            });
+            const capexSorted = [...schools].sort((a, b) => Math.abs(b.costs.capexBuildout - b.budget.capexBudget) - Math.abs(a.costs.capexBuildout - a.budget.capexBudget));
+            const pCap = Math.max(summary.totalCapacity, 1);
+            const pFacBudget = schools.reduce((s, sc) => s + sc.budget.modelFacPerStudent * sc.capacity, 0);
+            const pFacActual = summary.totalLease + summary.totalFixedFacilities + summary.totalVariableFacilities + summary.totalStudentServices;
+            const pFacVar = pFacActual - pFacBudget;
 
-          <SegmentTable
-            title="By School Type"
-            segments={bySchoolType}
-            onSelectSegment={(filteredSchools) => {
-              if (filteredSchools.length > 0) {
-                setSchoolTypeFilter(filteredSchools[0].schoolType);
-                setActiveTab('overview');
-              }
-            }}
-          />
+            return (
+              <>
+                {/* Filter pills */}
+                <div className="flex flex-wrap items-center gap-3">
+                  <h2 className="font-semibold text-white mr-2">Budget vs Actual</h2>
+                  <div className="flex flex-wrap gap-1">
+                    {typeOptions.map(opt => (
+                      <button key={opt.key} onClick={() => setSchoolTypeFilter(opt.key)}
+                        className={`px-3 py-1 text-xs font-medium rounded-full transition-colors ${schoolTypeFilter === opt.key ? 'bg-blue-600 text-white' : 'bg-slate-700 text-slate-300 hover:bg-slate-600'}`}
+                      >{opt.label}</button>
+                    ))}
+                  </div>
+                </div>
 
-          <SegmentTable
-            title="By Tuition Tier"
-            segments={byTuitionTier}
-            onSelectSegment={(filteredSchools) => {
-              if (filteredSchools.length > 0) {
-                setTuitionTierFilter(filteredSchools[0].tuitionTier);
-                setActiveTab('overview');
-              }
-            }}
-          />
+                {/* === CHART: CapEx vs Facilities OpEx Variance (Stacked Bar) === */}
+                {(() => {
+                  const varianceData = [...schools].map(school => {
+                    const cap = Math.max(school.capacity, 1);
+                    // Facilities OpEx variance per student
+                    const facBudget = school.budget.modelFacPerStudent * cap;
+                    const facActual = school.costs.lease.total + school.costs.fixedFacilities.total +
+                      school.costs.variableFacilities.total + school.costs.studentServices.total;
+                    const facVariancePS = (facActual - facBudget) / cap;
+                    // CapEx depreciation variance per student
+                    const capexBudget = school.budget.capexBudget;
+                    const capexActual = school.costs.capexBuildout;
+                    const deprPeriod = school.costs.annualDepreciation.total > 0
+                      ? capexActual / school.costs.annualDepreciation.total
+                      : 10;
+                    const capexBudgetDepr = capexBudget / deprPeriod;
+                    const capexVariancePS = (school.costs.annualDepreciation.total - capexBudgetDepr) / cap;
+                    return {
+                      name: school.displayName.length > 18 ? school.displayName.replace('Alpha ', 'A. ') : school.displayName,
+                      facOpEx: Math.round(facVariancePS),
+                      capExDepr: Math.round(capexVariancePS),
+                    };
+                  }).sort((a, b) => (b.facOpEx + b.capExDepr) - (a.facOpEx + a.capExDepr));
 
-          <SqftEfficiencyTable schools={schools} />
+                  // Summary stats
+                  const avgFacVar = varianceData.length > 0
+                    ? varianceData.reduce((s, d) => s + d.facOpEx, 0) / varianceData.length
+                    : 0;
+                  const avgCapVar = varianceData.length > 0
+                    ? varianceData.reduce((s, d) => s + d.capExDepr, 0) / varianceData.length
+                    : 0;
+
+                  return (
+                    <div className="table-card rounded-xl overflow-hidden">
+                      <div className="px-5 py-3 bg-slate-800 text-white">
+                        <div className="flex items-center justify-between">
+                          <div>
+                            <h3 className="font-semibold">Variance Source: Facilities OpEx vs CapEx Depreciation</h3>
+                            <p className="text-xs text-slate-300 mt-0.5">
+                              Per-student budget variance. CapEx depreciation is generally controlled — facilities operating expenses drive the overrun.
+                            </p>
+                          </div>
+                          <div className="flex gap-4 text-right">
+                            <div>
+                              <div className="text-xs text-slate-400">Avg OpEx Var.</div>
+                              <div className={`text-sm font-bold ${avgFacVar > 0 ? 'text-red-400' : 'text-green-400'}`}>
+                                {avgFacVar > 0 ? '+' : ''}${Math.abs(Math.round(avgFacVar)).toLocaleString()}
+                              </div>
+                            </div>
+                            <div>
+                              <div className="text-xs text-slate-400">Avg CapEx Var.</div>
+                              <div className={`text-sm font-bold ${avgCapVar > 0 ? 'text-red-400' : 'text-green-400'}`}>
+                                {avgCapVar > 0 ? '+' : avgCapVar < 0 ? '-' : ''}${Math.abs(Math.round(avgCapVar)).toLocaleString()}
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                      <div className="p-4" style={{ height: Math.max(420, varianceData.length * 28 + 60) }}>
+                        <ResponsiveContainer width="100%" height="100%">
+                          <BarChart
+                            data={varianceData}
+                            layout="vertical"
+                            margin={{ left: 140, right: 40, top: 5, bottom: 5 }}
+                            stackOffset="sign"
+                          >
+                            <CartesianGrid strokeDasharray="3 3" stroke="#334155" horizontal={false} />
+                            <XAxis
+                              type="number"
+                              tickFormatter={(v: number) => `$${v >= 0 ? '' : '-'}${Math.abs(v / 1000).toFixed(0)}K`}
+                              stroke="#94a3b8"
+                              fontSize={11}
+                            />
+                            <YAxis
+                              type="category"
+                              dataKey="name"
+                              width={130}
+                              tick={{ fill: '#cbd5e1', fontSize: 11 }}
+                              tickLine={false}
+                            />
+                            <Tooltip
+                              formatter={(v: number, name: string) => [`${v >= 0 ? '+' : ''}$${v.toLocaleString()}/student`, name]}
+                              contentStyle={{ backgroundColor: '#1e293b', border: '1px solid #475569', borderRadius: 8, fontSize: 12 }}
+                              labelStyle={{ color: '#e2e8f0', fontWeight: 600 }}
+                            />
+                            <Legend wrapperStyle={{ fontSize: 12, color: '#94a3b8', paddingTop: 8 }} />
+                            <ReferenceLine x={0} stroke="#94a3b8" strokeWidth={2} />
+                            <Bar
+                              dataKey="facOpEx"
+                              name="Facilities OpEx Variance"
+                              stackId="variance"
+                              fill="#ef4444"
+                              barSize={14}
+                              radius={[0, 3, 3, 0]}
+                            />
+                            <Bar
+                              dataKey="capExDepr"
+                              name="CapEx Depr. Variance"
+                              stackId="variance"
+                              fill="#64748b"
+                              barSize={14}
+                              radius={[0, 3, 3, 0]}
+                            />
+                          </BarChart>
+                        </ResponsiveContainer>
+                      </div>
+                      <div className="px-5 pb-4">
+                        <div className="bg-slate-800/60 border border-slate-700 rounded-lg p-3 text-xs text-slate-300">
+                          <span className="font-semibold text-white">Key insight:</span>{' '}
+                          CapEx depreciation variance (gray) is minimal for most schools — the buildout budgets are roughly on target.
+                          The red bars (Facilities OpEx) tell the real story: operating costs like food services, security, transportation,
+                          and maintenance consistently exceed the approved model, especially at low-utilization schools.
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })()}
+
+                {/* TABLE 1: Facilities Budget vs Actual */}
+                <div className="table-card rounded-xl overflow-hidden">
+                  <div className="px-5 py-3 bg-slate-800 text-white">
+                    <h3 className="font-semibold">Facilities — Budget vs Actual</h3>
+                    <p className="text-xs text-slate-300 mt-0.5">Budget = approved model (Col W). Actual = Lease + Fixed + Variable + Student Svc. All at capacity.</p>
+      </div>
+      <div className="overflow-x-auto">
+        <table className="min-w-full text-sm">
+          <thead className="bg-gray-50 border-b">
+            <tr>
+                          <th className="px-2 py-2 text-left text-xs font-medium text-slate-400 sticky left-0 z-10" style={{boxShadow: '2px 0 4px -2px rgba(0,0,0,0.06)'}}>School</th>
+                          <th className="px-2 py-2 text-center text-xs font-medium text-slate-400">Students</th>
+                          <th className="px-2 py-2 text-right text-xs font-medium text-blue-700 bg-blue-50">Budget</th>
+                          <th className="px-2 py-2 text-right text-xs font-medium text-blue-700 bg-blue-50">Budget/Student<br/><span className="font-normal text-[9px]">% of tuition</span></th>
+                          <th className="px-2 py-2 text-right text-xs font-medium text-blue-700 bg-blue-50">Actual</th>
+                          <th className="px-2 py-2 text-right text-xs font-medium text-blue-700 bg-blue-50">Actual/Student<br/><span className="font-normal text-[9px]">% of tuition</span></th>
+                          <th className="px-2 py-2 text-right text-xs font-medium text-amber-700 bg-amber-50">Absolute Var.</th>
+                          <th className="px-2 py-2 text-right text-xs font-medium text-amber-700 bg-amber-50">Var/Student<br/><span className="font-normal text-[9px]">% of tuition</span></th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-gray-200">
+                        {facSorted.map((school, idx) => {
+                          const cap = Math.max(school.capacity, 1);
+                          const budget = school.budget.modelFacPerStudent * cap;
+                          const actual = school.costs.lease.total + school.costs.fixedFacilities.total + school.costs.variableFacilities.total + school.costs.studentServices.total;
+                          const budgetPS = budget / cap;
+                          const actualPS = actual / cap;
+                          const absVar = actual - budget;
+                          const varPS = absVar / cap;
+                          const budgetPctT = school.tuition > 0 ? (budgetPS / school.tuition) * 100 : 0;
+                          const actualPctT = school.tuition > 0 ? (actualPS / school.tuition) * 100 : 0;
+                          const varPctT = school.tuition > 0 ? (varPS / school.tuition) * 100 : 0;
+                          const over = varPS > 0;
+              return (
+                            <tr key={school.id} className={`hover:bg-slate-700/40 cursor-pointer `} onClick={() => setSelectedSchool(school)}>
+                              <td className={`px-2 py-2 sticky left-0 z-10 ${idx % 2 === 1 ? '' : ''}`} style={{boxShadow: '2px 0 4px -2px rgba(0,0,0,0.06)'}}>
+                                <div className="font-medium text-slate-100 text-sm">{school.displayName}</div>
+                                <div className="text-[11px] text-slate-400">{schoolTypeLabels[school.schoolType]} | ${school.tuition.toLocaleString()} | <span className={school.isOperating ? 'text-green-400' : 'text-slate-500'}>{school.isOperating ? 'Operating' : 'Pre-Opening'}</span></div>
+                  </td>
+                              <td className="px-2 py-2 text-center">{school.capacity}</td>
+                              <td className="px-2 py-2 text-right">{formatCurrency(budget)}</td>
+                              <td className="px-2 py-2 text-right">
+                                <div>{fmt(budgetPS)}</div>
+                                <div className="text-[10px] text-slate-400">{budgetPctT.toFixed(1)}%</div>
+                              </td>
+                              <td className="px-2 py-2 text-right">{formatCurrency(actual)}</td>
+                              <td className="px-2 py-2 text-right">
+                                <div>{fmt(actualPS)}</div>
+                                <div className="text-[10px] text-slate-400">{actualPctT.toFixed(1)}%</div>
+                              </td>
+                              <td className={`px-2 py-2 text-right font-medium ${over ? 'text-red-400' : 'text-green-400'}`}>
+                                {over ? '+' : ''}{formatCurrency(absVar)}
+                              </td>
+                              <td className={`px-2 py-2 text-right answer-glow ${over ? 'text-red-400' : 'text-green-400'}`}>
+                                <div className="font-bold">{over ? '+' : ''}{fmt(varPS)}</div>
+                                <div className="text-[10px] text-slate-400">{varPctT >= 0 ? '+' : ''}{varPctT.toFixed(1)}%</div>
+                              </td>
+                </tr>
+              );
+            })}
+                        {(() => {
+                          const pBudgetPS = pFacBudget / pCap;
+                          const pActualPS = pFacActual / pCap;
+                          const pVarPS = pFacVar / pCap;
+                          return (
+            <tr className="bg-gray-100 font-bold border-t-2 border-gray-400">
+                              <td className="px-2 py-3">PORTFOLIO</td>
+                              <td className="px-2 py-3 text-center">{summary.totalCapacity}</td>
+                              <td className="px-2 py-3 text-right">{formatCurrency(pFacBudget)}</td>
+                              <td className="px-2 py-3 text-right">{fmt(pBudgetPS)}</td>
+                              <td className="px-2 py-3 text-right">{formatCurrency(pFacActual)}</td>
+                              <td className="px-2 py-3 text-right">{fmt(pActualPS)}</td>
+                              <td className={`px-2 py-3 text-right ${pFacVar > 0 ? 'text-red-400' : 'text-green-400'}`}>
+                                {pFacVar > 0 ? '+' : ''}{formatCurrency(pFacVar)}
+                              </td>
+                              <td className={`px-2 py-3 text-right ${pFacVar > 0 ? 'text-red-400' : 'text-green-400'}`}>
+                                {pFacVar > 0 ? '+' : ''}{fmt(pVarPS)}
+                              </td>
+            </tr>
+                          );
+                        })()}
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+                {/* TABLE 2: CapEx Budget vs Actual */}
+                <div className="table-card rounded-xl overflow-hidden">
+                  <div className="px-5 py-3 bg-slate-800 text-white">
+                    <h3 className="font-semibold">CapEx — Budget vs Actual</h3>
+                    <p className="text-xs text-slate-300 mt-0.5">Budget = rate × capacity × depr period. Budget Depr = annual. Absolute Var = actual − budget. Depr Var/Student = annualized variance per student.</p>
+      </div>
+      <div className="overflow-x-auto">
+        <table className="min-w-full text-sm">
+          <thead className="bg-gray-50 border-b">
+            <tr>
+                          <th className="px-2 py-2 text-left text-xs font-medium text-slate-400 sticky left-0 z-10" style={{boxShadow: '2px 0 4px -2px rgba(0,0,0,0.06)'}}>School</th>
+                          <th className="px-2 py-2 text-center text-xs font-medium text-slate-400">Students</th>
+                          <th className="px-2 py-2 text-right text-xs font-medium text-slate-700 bg-slate-50">Budget</th>
+                          <th className="px-2 py-2 text-right text-xs font-medium text-slate-700 bg-slate-50">Budget Depr.</th>
+                          <th className="px-2 py-2 text-right text-xs font-medium text-slate-700 bg-slate-50">Actual</th>
+                          <th className="px-2 py-2 text-right text-xs font-medium text-slate-700 bg-slate-50">Actual Depr.</th>
+                          <th className="px-2 py-2 text-right text-xs font-medium text-amber-700 bg-amber-50">Absolute Var.</th>
+                          <th className="px-2 py-2 text-right text-xs font-medium text-amber-700 bg-amber-50">Var/Year</th>
+                          <th className="px-2 py-2 text-right text-xs font-medium text-amber-700 bg-amber-50">Depr. Var/Student<br/><span className="font-normal text-[9px]">% of tuition</span></th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-gray-200">
+                        {capexSorted.map((school, idx) => {
+                          const cap = Math.max(school.capacity, 1);
+                          const budget = school.budget.capexBudget;
+                          const actual = school.costs.capexBuildout;
+                          const annDepr = school.costs.annualDepreciation.total;
+                          const deprPeriod = annDepr > 0 ? actual / annDepr : 10;
+                          const budgetDepr = budget / deprPeriod;
+                          const absVar = actual - budget;
+                          const deprVarPS = (annDepr - budgetDepr) / cap;
+                          const pctT = school.tuition > 0 ? (deprVarPS / school.tuition) * 100 : 0;
+                          const isAbsOver = absVar > 0;
+                          const isDeprOver = deprVarPS > 0;
+              return (
+                            <tr key={school.id} className={`hover:bg-slate-700/40 cursor-pointer `} onClick={() => setSelectedSchool(school)}>
+                              <td className={`px-2 py-2 sticky left-0 z-10 ${idx % 2 === 1 ? '' : ''}`} style={{boxShadow: '2px 0 4px -2px rgba(0,0,0,0.06)'}}>
+                                <div className="font-medium text-slate-100 text-sm">{school.displayName}</div>
+                                <div className="text-[11px] text-slate-400">{schoolTypeLabels[school.schoolType]} | ${school.tuition.toLocaleString()} | <span className={school.isOperating ? 'text-green-400' : 'text-slate-500'}>{school.isOperating ? 'Operating' : 'Pre-Opening'}</span></div>
+                  </td>
+                              <td className="px-2 py-2 text-center">{school.capacity}</td>
+                              <td className="px-2 py-2 text-right">{formatCurrency(budget)}</td>
+                              <td className="px-2 py-2 text-right text-slate-600">{formatCurrency(budgetDepr)}<span className="text-[10px] text-slate-400">/yr</span></td>
+                              <td className="px-2 py-2 text-right">{formatCurrency(actual)}</td>
+                              <td className="px-2 py-2 text-right text-slate-600">{formatCurrency(annDepr)}<span className="text-[10px] text-slate-400">/yr</span></td>
+                              <td className={`px-2 py-2 text-right font-medium ${isAbsOver ? 'text-red-400' : 'text-green-400'}`}>
+                                {isAbsOver ? '+' : ''}{formatCurrency(absVar)}
+                  </td>
+                              <td className={`px-2 py-2 text-right font-medium ${isDeprOver ? 'text-red-400' : 'text-green-400'}`}>
+                                {isDeprOver ? '+' : ''}{formatCurrency(annDepr - budgetDepr)}
+                  </td>
+                              <td className={`px-2 py-2 text-right answer-glow ${isDeprOver ? 'text-red-400' : 'text-green-400'}`}>
+                                <div className="font-bold">{isDeprOver ? '+' : ''}{fmt(deprVarPS)}</div>
+                                <div className="text-[10px] text-slate-400">{pctT >= 0 ? '+' : ''}{pctT.toFixed(1)}%</div>
+                  </td>
+                            </tr>
+                          );
+                        })}
+                        {(() => {
+                          const pBudget = summary.totalCapexBudget;
+                          const pActual = summary.totalCapexBuildout;
+                          const pDeprPeriod = summary.totalAnnualDepreciation > 0 ? pActual / summary.totalAnnualDepreciation : 10;
+                          const pBudgetDepr = pBudget / pDeprPeriod;
+                          const pActualDepr = summary.totalAnnualDepreciation;
+                          const pAbsVar = pActual - pBudget;
+                          const pDeprVarPS = (pActualDepr - pBudgetDepr) / pCap;
+                          return (
+                            <tr className="bg-gray-100 font-bold border-t-2 border-gray-400">
+                              <td className="px-2 py-3">PORTFOLIO</td>
+                              <td className="px-2 py-3 text-center">{summary.totalCapacity}</td>
+                              <td className="px-2 py-3 text-right">{formatCurrency(pBudget)}</td>
+                              <td className="px-2 py-3 text-right text-slate-700">{formatCurrency(pBudgetDepr)}<span className="text-[10px] text-slate-400">/yr</span></td>
+                              <td className="px-2 py-3 text-right">{formatCurrency(pActual)}</td>
+                              <td className="px-2 py-3 text-right text-slate-700">{formatCurrency(pActualDepr)}<span className="text-[10px] text-slate-400">/yr</span></td>
+                              <td className={`px-2 py-3 text-right ${pAbsVar > 0 ? 'text-red-400' : 'text-green-400'}`}>
+                                {pAbsVar > 0 ? '+' : ''}{formatCurrency(pAbsVar)}
+                  </td>
+                              <td className={`px-2 py-3 text-right ${(pActualDepr - pBudgetDepr) > 0 ? 'text-red-400' : 'text-green-400'}`}>
+                                {(pActualDepr - pBudgetDepr) > 0 ? '+' : ''}{formatCurrency(pActualDepr - pBudgetDepr)}
+                  </td>
+                              <td className={`px-2 py-3 text-right ${pDeprVarPS > 0 ? 'text-red-400' : 'text-green-400'}`}>
+                                {pDeprVarPS > 0 ? '+' : ''}{fmt(pDeprVarPS)}
+                  </td>
+                </tr>
+              );
+                        })()}
+          </tbody>
+        </table>
+      </div>
+    </div>
+              </>
+            );
+          })()}
         </div>
       )}
 
-      {/* BREAK-EVEN TAB */}
+      {/* UNIT ECONOMICS / BREAK-EVEN TAB */}
       {activeTab === 'breakeven' && (
         <div className="space-y-6">
-          <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
-            <div className="font-medium text-blue-800">Understanding Break-Even</div>
-            <div className="text-sm text-blue-700 mt-1">
-              This table shows how many students each school needs to reach target
-              facilities-to-tuition ratios.
-              <strong className="ml-1">15% is the ideal target</strong> - above 20% is a warning
-              sign. Red numbers indicate the target is impossible at current capacity.
-            </div>
-          </div>
+          {/* Per-school unit economics */}
+          {(() => {
+            const fmt = (v: number) => `$${Math.round(v).toLocaleString()}`;
+            const typeOptions: { key: SchoolType | 'all'; label: string }[] = [
+              { key: 'all', label: 'All' },
+              ...Object.entries(schoolTypeLabels).map(([k, l]) => ({ key: k as SchoolType, label: l })),
+            ];
 
-          <BreakevenTable schools={schools} />
-          <NewSchoolCalculator />
+  return (
+              <>
+                <div className="flex flex-wrap items-center gap-3">
+                  <h2 className="font-semibold text-white mr-2">Unit Economics &amp; Break-Even</h2>
+                  <div className="flex flex-wrap gap-1">
+                    {typeOptions.map(opt => (
+                      <button key={opt.key} onClick={() => setSchoolTypeFilter(opt.key)}
+                        className={`px-3 py-1 text-xs font-medium rounded-full transition-colors ${schoolTypeFilter === opt.key ? 'bg-blue-600 text-white' : 'bg-slate-700 text-slate-300 hover:bg-slate-600'}`}
+                      >{opt.label}</button>
+                    ))}
+                  </div>
+      </div>
+
+                {/* === CHART: Model vs Actual Margin Horizontal Bar === */}
+                {(() => {
+                  const marginData = [...schools].map(school => {
+                    const facTotal = school.costs.lease.total + school.costs.fixedFacilities.total +
+                      school.costs.variableFacilities.total + school.costs.studentServices.total;
+                    const ue = calculateUnitEconomics(school.tuition, school.capacity, facTotal, school.costs.annualDepreciation.total);
+                    const modelFacTotal = school.budget.modelFacPerStudent * school.capacity;
+                    const modelCapexAnn = school.budget.capexBudget / 10;
+                    const ueModel = calculateUnitEconomics(school.tuition, school.capacity, modelFacTotal, modelCapexAnn);
+                    return {
+                      name: school.displayName.length > 18 ? school.displayName.replace('Alpha ', 'A. ') : school.displayName,
+                      model: parseFloat(ueModel.marginPct.toFixed(1)),
+                      actual: parseFloat(ue.marginPct.toFixed(1)),
+                      target: getTargetPct(school.tuition),
+                    };
+                  }).sort((a, b) => a.actual - b.actual);
+
+                  return (
+                    <div className="table-card rounded-xl overflow-hidden">
+                      <div className="px-5 py-3 bg-slate-800 text-white">
+                        <h3 className="font-semibold">Model vs Actual Margin (at Capacity)</h3>
+                        <p className="text-xs text-slate-300 mt-0.5">
+                          Blue = model margin %. Colored bar = actual margin % (green = at target, amber = positive but below target, red = negative). Sorted worst → best.
+                        </p>
+                      </div>
+                      <div className="p-4" style={{ height: Math.max(420, marginData.length * 30 + 60) }}>
+                        <ResponsiveContainer width="100%" height="100%">
+                          <BarChart data={marginData} layout="vertical" margin={{ left: 140, right: 40, top: 5, bottom: 5 }}>
+                            <CartesianGrid strokeDasharray="3 3" stroke="#334155" horizontal={false} />
+                            <XAxis
+                              type="number"
+                              tickFormatter={(v: number) => `${v}%`}
+                              stroke="#94a3b8"
+                              fontSize={11}
+                              domain={['auto', 'auto']}
+                            />
+                            <YAxis
+                              type="category"
+                              dataKey="name"
+                              width={130}
+                              tick={{ fill: '#cbd5e1', fontSize: 11 }}
+                              tickLine={false}
+                            />
+                            <Tooltip
+                              formatter={(v: number, name: string) => [`${v.toFixed(1)}%`, name]}
+                              contentStyle={{ backgroundColor: '#1e293b', border: '1px solid #475569', borderRadius: 8, fontSize: 12 }}
+                              labelStyle={{ color: '#e2e8f0', fontWeight: 600 }}
+                            />
+                            <Legend wrapperStyle={{ fontSize: 12, color: '#94a3b8', paddingTop: 8 }} />
+                            <ReferenceLine x={0} stroke="#64748b" strokeWidth={1.5} />
+                            <Bar dataKey="model" name="Model Margin %" fill="#3b82f6" barSize={9} radius={[0, 3, 3, 0]} />
+                            <Bar dataKey="actual" name="Actual Margin %" barSize={9} radius={[0, 3, 3, 0]}>
+                              {marginData.map((entry, idx) => (
+                                <Cell
+                                  key={idx}
+                                  fill={entry.actual >= entry.target ? '#22c55e' : entry.actual >= 0 ? '#f59e0b' : '#ef4444'}
+                                />
+                              ))}
+                            </Bar>
+                          </BarChart>
+                        </ResponsiveContainer>
+                      </div>
+                    </div>
+                  );
+                })()}
+
+                {/* === CHART: Traffic Light Matrix — Target Achievability by Tuition Tier === */}
+                {(() => {
+                  const tiers: TuitionTier[] = ['premium', 'standard', 'value', 'economy'];
+                  const schoolsByTier = tiers.map(tier => ({
+                    tier,
+                    label: tuitionTierLabels[tier],
+                    items: schools.filter(s => s.tuitionTier === tier).map(school => {
+                      const facTotal = school.costs.lease.total + school.costs.fixedFacilities.total +
+                        school.costs.variableFacilities.total + school.costs.studentServices.total;
+                      const ueAtCap = calculateUnitEconomics(school.tuition, school.capacity, facTotal, school.costs.annualDepreciation.total);
+                      const target = getTargetPct(school.tuition);
+                      const canReach = ueAtCap.marginPct >= target;
+                      const isPositive = ueAtCap.marginPct >= 0;
+                      return { school, marginAtCap: ueAtCap.marginPct, target, canReach, isPositive };
+                    }).sort((a, b) => b.marginAtCap - a.marginAtCap),
+                  })).filter(t => t.items.length > 0);
+
+                  const totalCan = schoolsByTier.reduce((s, t) => s + t.items.filter(x => x.canReach).length, 0);
+                  const totalAll = schoolsByTier.reduce((s, t) => s + t.items.length, 0);
+
+                  return (
+                    <div className="table-card rounded-xl overflow-hidden">
+                      <div className="px-5 py-3 bg-slate-800 text-white flex items-center justify-between">
+                        <div>
+                          <h3 className="font-semibold">Target Achievability by Tuition Tier</h3>
+                          <p className="text-xs text-slate-300 mt-0.5">Can each school reach its tier-specific margin target at full capacity?</p>
+                        </div>
+                        <div className="text-right">
+                          <div className="text-lg font-bold text-white">{totalCan}<span className="text-slate-400 font-normal">/{totalAll}</span></div>
+                          <div className="text-[10px] text-slate-400 uppercase tracking-wide">at target</div>
+                        </div>
+                      </div>
+                      <div className="p-5 space-y-5">
+                        {schoolsByTier.map(t => (
+                          <div key={t.tier}>
+                            <div className="flex items-center gap-2 mb-2">
+                              <span className="text-sm font-semibold text-white">{t.label}</span>
+                              <span className="text-xs text-slate-400">Target: {t.items[0]?.target}% margin</span>
+                              <span className="text-xs text-slate-500 ml-auto">
+                                {t.items.filter(s => s.canReach).length}/{t.items.length} pass
+                              </span>
+                            </div>
+                            <div className="flex flex-wrap gap-2">
+                              {t.items.map(s => (
+                                <div
+                                  key={s.school.id}
+                                  className={`px-3 py-2 rounded-lg border cursor-pointer transition-all hover:scale-105 min-w-[130px] ${
+                                    s.canReach
+                                      ? 'bg-green-900/40 border-green-600 text-green-300'
+                                      : s.isPositive
+                                        ? 'bg-amber-900/40 border-amber-600 text-amber-300'
+                                        : 'bg-red-900/40 border-red-600 text-red-300'
+                                  }`}
+                                  onClick={() => setSelectedSchool(s.school)}
+                                  title={`${s.school.displayName}: ${s.marginAtCap.toFixed(1)}% margin at capacity (target: ${s.target}%)`}
+                                >
+                                  <div className="text-xs font-medium truncate">
+                                    {s.school.displayName.length > 18 ? s.school.displayName.replace('Alpha ', 'A. ') : s.school.displayName}
+                                  </div>
+                                  <div className="flex items-center justify-between mt-1">
+                                    <span className="text-sm font-bold">
+                                      {s.marginAtCap >= 0 ? '+' : ''}{s.marginAtCap.toFixed(1)}%
+                                    </span>
+                                    <span className="text-[10px] opacity-60">/ {s.target}%</span>
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        ))}
+                        <div className="flex gap-5 pt-3 border-t border-slate-700 text-xs text-slate-400">
+                          <div className="flex items-center gap-1.5">
+                            <div className="w-3 h-3 rounded bg-green-600" /> At or above target
+                          </div>
+                          <div className="flex items-center gap-1.5">
+                            <div className="w-3 h-3 rounded bg-amber-600" /> Positive margin, below target
+                          </div>
+                          <div className="flex items-center gap-1.5">
+                            <div className="w-3 h-3 rounded bg-red-600" /> Negative margin at capacity
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })()}
+
+                {/* Unit Economics Table */}
+                <div className="table-card rounded-xl overflow-hidden">
+                  <div className="px-5 py-3 bg-slate-800 text-white">
+                    <h3 className="font-semibold">School-by-School Unit Economics (at Capacity)</h3>
+                    <p className="text-xs text-slate-300 mt-0.5">Full P&amp;L per student at capacity using approved model formulas. All costs per student.</p>
+        </div>
+        <div className="overflow-x-auto">
+          <table className="min-w-full text-sm">
+                      <thead>
+                        <tr className="bg-gray-100 border-b">
+                          <th className="px-2 py-1 text-left text-xs font-medium text-slate-400 sticky left-0 z-10" rowSpan={2} style={{boxShadow: '2px 0 4px -2px rgba(0,0,0,0.06)'}}>School</th>
+                          <th className="px-2 py-1 text-center text-xs font-medium text-slate-400" rowSpan={2}>Cap.</th>
+                          <th className="px-2 py-1 text-right text-xs font-bold text-green-800 bg-green-50 border-l" rowSpan={2}>Revenue<br/>/Student</th>
+                          <th className="px-2 py-1 text-center text-xs font-bold text-gray-700 bg-gray-100 border-l" colSpan={6}>Costs / Student</th>
+                          <th className="px-2 py-1 text-center text-xs font-bold text-indigo-800 bg-indigo-50 border-l" colSpan={4}>Margin at Capacity</th>
+                          <th className="px-2 py-1 text-center text-xs font-bold text-amber-800 bg-amber-50 border-l" rowSpan={2}>Target</th>
+                        </tr>
+                        <tr className="bg-gray-50 border-b">
+                          <th className="px-2 py-1.5 text-right text-[11px] font-medium text-slate-300 border-l">Staffing</th>
+                          <th className="px-2 py-1.5 text-right text-[11px] font-medium text-blue-700">Facilities</th>
+                          <th className="px-2 py-1.5 text-right text-[11px] font-medium text-slate-700">CapEx Depr.</th>
+                          <th className="px-2 py-1.5 text-right text-[11px] font-medium text-violet-700">Programs</th>
+                          <th className="px-2 py-1.5 text-right text-[11px] font-medium text-orange-700">Misc</th>
+                          <th className="px-2 py-1.5 text-right text-[11px] font-medium text-rose-700">Timeback</th>
+                          <th className="px-2 py-1.5 text-right text-[11px] font-medium text-blue-600 bg-blue-50 border-l">Model %</th>
+                          <th className="px-2 py-1.5 text-right text-[11px] font-bold text-indigo-700 bg-indigo-100 border-l-2 border-indigo-300">Actual %</th>
+                          <th className="px-2 py-1.5 text-right text-[11px] font-medium text-slate-300">Gap</th>
+                          <th className="px-2 py-1.5 text-right text-[11px] font-medium text-slate-300">Driver</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-gray-200">
+                        {[...schools].sort((a, b) => {
+                          const ueA = calculateUnitEconomics(a.tuition, a.capacity,
+                            a.costs.lease.total + a.costs.fixedFacilities.total + a.costs.variableFacilities.total + a.costs.studentServices.total,
+                            a.costs.annualDepreciation.total);
+                          const ueB = calculateUnitEconomics(b.tuition, b.capacity,
+                            b.costs.lease.total + b.costs.fixedFacilities.total + b.costs.variableFacilities.total + b.costs.studentServices.total,
+                            b.costs.annualDepreciation.total);
+                          return ueA.marginPct - ueB.marginPct;
+                        }).map((school, idx) => {
+                          const facTotal = school.costs.lease.total + school.costs.fixedFacilities.total + school.costs.variableFacilities.total + school.costs.studentServices.total;
+                          const ue = calculateUnitEconomics(school.tuition, school.capacity, facTotal, school.costs.annualDepreciation.total);
+                          // Model margin: using budgeted facility costs instead of actual
+                          const modelFacTotal = school.budget.modelFacPerStudent * school.capacity;
+                          const modelCapexAnn = school.budget.capexBudget / 10; // 10yr depr
+                          const ueModel = calculateUnitEconomics(school.tuition, school.capacity, modelFacTotal, modelCapexAnn);
+                          const target = getTargetPct(school.tuition);
+                          const hitsTarget = ue.marginPct >= target;
+                          const marginGap = ue.marginPct - ueModel.marginPct;
+                          const facGapPS = ue.facilitiesPerStudent - ueModel.facilitiesPerStudent;
+
+                return (
+                            <tr key={school.id} className={`hover:bg-slate-700/40 cursor-pointer `} onClick={() => setSelectedSchool(school)}>
+                              <td className={`px-2 py-2 sticky left-0 z-10 ${idx % 2 === 1 ? '' : ''}`} style={{boxShadow: '2px 0 4px -2px rgba(0,0,0,0.06)'}}>
+                                <div className="font-medium text-slate-100 text-sm">{school.displayName}</div>
+                                <div className="text-[11px] text-slate-400">{schoolTypeLabels[school.schoolType]} | ${school.tuition.toLocaleString()}</div>
+                    </td>
+                              <td className="px-2 py-2 text-center">{school.capacity}</td>
+                              <td className="px-2 py-2 text-right text-green-400 font-medium border-l">{fmt(ue.tuition)}</td>
+                              <td className="px-2 py-2 text-right border-l">{fmt(ue.staffingPerStudent)}</td>
+                              <td className="px-2 py-2 text-right text-blue-700">{fmt(ue.facilitiesPerStudent)}</td>
+                              <td className="px-2 py-2 text-right text-slate-600">{fmt(ue.capexPerStudent)}</td>
+                              <td className="px-2 py-2 text-right text-violet-700">{fmt(ue.programsPerStudent)}</td>
+                              <td className="px-2 py-2 text-right text-orange-600">{fmt(ue.miscPerStudent)}</td>
+                              <td className="px-2 py-2 text-right text-rose-600">{fmt(ue.timebackPerStudent)}</td>
+                              {/* Model Margin */}
+                              <td className={`px-2 py-2 text-right border-l ${ueModel.marginPct >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                                {ueModel.marginPct >= 0 ? '+' : ''}{ueModel.marginPct.toFixed(1)}%
+                    </td>
+                              {/* Actual Margin — answer column */}
+                              <td className={`px-2 py-2 text-right answer-glow font-bold text-base ${ue.marginPct >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                                {ue.marginPct >= 0 ? '+' : ''}{ue.marginPct.toFixed(1)}%
+                    </td>
+                              {/* Gap */}
+                              <td className={`px-2 py-2 text-right text-sm ${marginGap >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                                {marginGap >= 0 ? '+' : ''}{marginGap.toFixed(1)}
+                    </td>
+                              {/* Driver */}
+                              <td className="px-2 py-2 text-right text-[11px] text-slate-400">
+                                {Math.abs(facGapPS) > 500 ? (
+                                  <span className={facGapPS > 0 ? 'text-red-500' : 'text-green-500'}>
+                                    Fac {facGapPS > 0 ? '+' : ''}{fmt(facGapPS)}
+                      </span>
+                                ) : '—'}
+                    </td>
+                              <td className="px-2 py-2 text-center border-l">
+                                <span className={`px-2 py-0.5 rounded text-xs font-medium ${hitsTarget ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'}`}>
+                                  {target}%{hitsTarget ? ' ✓' : ' ✗'}
+                  </span>
+                </td>
+              </tr>
+                          );
+                        })}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+                {/* Break-Even Analysis */}
+                <div className="table-card rounded-xl overflow-hidden">
+                  <div className="px-5 py-3 bg-slate-800 text-white">
+                    <h3 className="font-semibold">Break-Even &amp; Target Analysis</h3>
+                    <p className="text-xs text-slate-300 mt-0.5">Students needed for breakeven (0% margin) and tier-specific target margin. Uses actual facilities costs + model staffing/programs/timeback formulas.</p>
+        </div>
+        <div className="overflow-x-auto">
+          <table className="min-w-full text-sm">
+            <thead className="bg-gray-50 border-b">
+              <tr>
+                          <th className="px-2 py-2 text-left text-xs font-medium text-slate-400 sticky left-0 z-10" style={{boxShadow: '2px 0 4px -2px rgba(0,0,0,0.06)'}}>School</th>
+                          <th className="px-2 py-2 text-center text-xs font-medium text-slate-400">Capacity</th>
+                          <th className="px-2 py-2 text-center text-xs font-medium text-slate-400">Current</th>
+                          <th className="px-2 py-2 text-center text-xs font-medium text-amber-700 bg-amber-50">Students to B/E</th>
+                          <th className="px-2 py-2 text-center text-xs font-medium text-blue-700 bg-blue-50">Students to Target</th>
+                          <th className="px-2 py-2 text-center text-xs font-medium text-slate-400">Target %</th>
+                          <th className="px-2 py-2 text-right text-xs font-medium text-green-400 bg-green-50">Margin @ Cap</th>
+                          <th className="px-2 py-2 text-right text-xs font-medium text-green-400 bg-green-50">Margin % @ Cap</th>
+                          <th className="px-2 py-2 text-center text-xs font-medium text-slate-400">Verdict</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-gray-200">
+                        {[...schools].sort((a, b) => a.capacity - b.capacity).map((school) => {
+                          const facTotal = school.costs.lease.total + school.costs.fixedFacilities.total + school.costs.variableFacilities.total + school.costs.studentServices.total;
+                          const capexAnn = school.costs.annualDepreciation.total;
+                          const target = getTargetPct(school.tuition);
+
+                          // Binary search for breakeven and target students
+                          let beStudents = 0;
+                          let targetStudents = 0;
+                          for (let s = 1; s <= school.capacity * 2; s++) {
+                            const ue = calculateUnitEconomics(school.tuition, s, facTotal, capexAnn);
+                            if (beStudents === 0 && ue.margin >= 0) beStudents = s;
+                            if (targetStudents === 0 && ue.marginPct >= target) targetStudents = s;
+                            if (beStudents > 0 && targetStudents > 0) break;
+                          }
+
+                          const ueAtCap = calculateUnitEconomics(school.tuition, school.capacity, facTotal, capexAnn);
+                          const canBE = beStudents > 0 && beStudents <= school.capacity;
+                          const canTarget = targetStudents > 0 && targetStudents <= school.capacity;
+                          const gapToBE = beStudents > 0 ? beStudents - school.currentEnrollment : school.capacity;
+
+                return (
+                            <tr key={school.id} className="hover:bg-slate-700/40 cursor-pointer" onClick={() => setSelectedSchool(school)}>
+                              <td className="px-2 py-2">
+                                <div className="font-medium text-slate-100 text-sm">{school.displayName}</div>
+                                <div className="text-[11px] text-slate-400">{schoolTypeLabels[school.schoolType]} | ${school.tuition.toLocaleString()}</div>
+                    </td>
+                              <td className="px-2 py-2 text-center">{school.capacity}</td>
+                              <td className="px-2 py-2 text-center">{school.currentEnrollment}</td>
+                              <td className="px-2 py-2 text-center">
+                                {beStudents > 0 ? (
+                                  <div>
+                                    <span className={canBE ? 'text-green-400 font-medium' : 'text-red-400 font-medium'}>{beStudents}</span>
+                                    {gapToBE > 0 && <div className="text-[10px] text-slate-400">+{gapToBE} needed</div>}
+                                  </div>
+                                ) : <span className="text-red-500 text-xs">N/A</span>}
+                    </td>
+                              <td className="px-2 py-2 text-center">
+                                {targetStudents > 0 ? (
+                                  <div>
+                                    <span className={canTarget ? 'text-green-400 font-medium' : 'text-red-400 font-medium'}>{targetStudents}</span>
+                                    {!canTarget && <div className="text-[10px] text-red-500">Exceeds cap!</div>}
+                                  </div>
+                                ) : <span className="text-red-500 text-xs">N/A</span>}
+                    </td>
+                              <td className="px-2 py-2 text-center">
+                                <span className="px-2 py-0.5 rounded text-xs bg-blue-100 text-blue-800">{target}%</span>
+                              </td>
+                              <td className={`px-2 py-2 text-right font-medium ${ueAtCap.margin >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                                {formatCurrency(ueAtCap.margin)}
+                              </td>
+                              <td className={`px-2 py-2 text-right font-bold ${ueAtCap.marginPct >= target ? 'text-green-400' : ueAtCap.marginPct >= 0 ? 'text-amber-600' : 'text-red-400'}`}>
+                                {ueAtCap.marginPct >= 0 ? '+' : ''}{ueAtCap.marginPct.toFixed(1)}%
+                              </td>
+                              <td className="px-2 py-2 text-center">
+                                {ueAtCap.marginPct >= target ? (
+                                  <span className="px-2 py-0.5 rounded text-xs bg-green-100 text-green-800">At Target</span>
+                                ) : ueAtCap.marginPct >= 0 ? (
+                                  <span className="px-2 py-0.5 rounded text-xs bg-amber-100 text-amber-800">Below Target</span>
+                                ) : (
+                                  <span className="px-2 py-0.5 rounded text-xs bg-red-100 text-red-800">Loss at Cap</span>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+                <NewSchoolCalculator summary={summary} />
+              </>
+            );
+          })()}
         </div>
       )}
 
-      {/* CAPEX & BUDGET TAB */}
-      {activeTab === 'capex-budget' && <CapExBudgetTab schools={schools} summary={summary} />}
 
       {/* OVERVIEW TAB */}
       {activeTab === 'overview' && (
         <>
-          {/* Decision Panel */}
-          <DecisionPanel schools={schools} summary={summary} />
+          {/* School-by-School Category Table */}
+          {(() => {
+            const bySqft = overviewBasis === 'sqft';
+            const atCap = overviewBasis === 'capacity';
+            const getDivisor = (s: SchoolData) =>
+              bySqft ? Math.max(s.sqft, 1) : atCap ? Math.max(s.capacity, 1) : Math.max(s.currentEnrollment, 1);
+            const basisLabel = bySqft ? 'per sq ft' : atCap ? 'per student (capacity)' : 'per student (current)';
+            const basisColLabel = bySqft ? 'Sq Ft' : 'Students';
+            const fmt = (v: number) => bySqft ? `$${v.toFixed(2)}` : `$${Math.round(v).toLocaleString()}`;
+            const showPct = !bySqft;
+            const pctFmt = (v: number, tuition: number) => tuition > 0 ? `${((v / tuition) * 100).toFixed(1)}%` : '—';
 
-          {/* Fixed Cost Warning Banner */}
-          <div className="bg-amber-50 border border-amber-200 rounded-lg p-4 mb-6">
-            <div className="flex items-start">
-              <div className="text-amber-500 text-xl mr-3">⚠</div>
-              <div>
-                <div className="font-medium text-amber-800">Fixed Cost Commitment</div>
-                <div className="text-sm text-amber-700 mt-1">
-                  <strong>{fixedPct.toFixed(0)}%</strong> of facilities costs (
-                  {formatCurrency(fixedTotal)}) are fixed and cannot scale with enrollment. Once you
-                  sign the lease and spend the capex, these costs are locked in.
-                </div>
-              </div>
-            </div>
-          </div>
+            const getSchoolVal = (s: SchoolData, key: string) => {
+              const d = getDivisor(s);
+              const lease = s.costs.lease.total / d;
+              const capex = s.costs.annualDepreciation.total / d;
+              const fixed = s.costs.fixedFacilities.total / d;
+              const vfac = s.costs.variableFacilities.total / d;
+              const svc = s.costs.studentServices.total / d;
+              if (key === 'name') return 0; // handled separately
+              if (key === 'students') return bySqft ? s.sqft : atCap ? s.capacity : s.currentEnrollment;
+              if (key === 'lease') return lease;
+              if (key === 'capexTotal') return s.costs.capexBuildout;
+              if (key === 'capexPS') return capex;
+              if (key === 'leaseCapex') return lease + capex;
+              if (key === 'fixedFac') return fixed;
+              if (key === 'varFac') return vfac;
+              if (key === 'svc') return svc;
+              if (key === 'facTotal') return fixed + vfac + svc;
+              if (key === 'total') return lease + capex + fixed + vfac + svc;
+              return s.costs.grandTotal / d;
+            };
+            const sorted = [...sortedSchools].sort((a, b) => {
+              if (overviewSort.key === 'name') return overviewSort.dir === 'asc' ? a.displayName.localeCompare(b.displayName) : b.displayName.localeCompare(a.displayName);
+              const va = getSchoolVal(a, overviewSort.key);
+              const vb = getSchoolVal(b, overviewSort.key);
+              return overviewSort.dir === 'desc' ? vb - va : va - vb;
+            });
 
-          {/* 6-Category Summary Cards */}
-          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4 mb-6">
-            <MetricCard
-              title="1. Lease"
-              value={formatCurrency(summary.totalLease)}
-              subtitle="Rent (Day 1)"
-              color="blue"
-            />
-            <MetricCard
-              title="2. Fixed Facilities"
-              value={formatCurrency(summary.totalFixedFacilities)}
-              subtitle="Security, IT, Landscaping"
-              color="violet"
-            />
-            <MetricCard
-              title="3. Variable Facilities"
-              value={formatCurrency(summary.totalVariableFacilities)}
-              subtitle="Janitorial, Utilities, Repairs"
-              color="teal"
-            />
-            <MetricCard
-              title="4. Student Services"
-              value={formatCurrency(summary.totalStudentServices)}
-              subtitle="Food, Transportation"
-              color="orange"
-            />
-            <MetricCard
-              title="5. Annual Depreciation"
-              value={formatCurrency(summary.totalAnnualDepreciation)}
-              subtitle="Amortized CapEx"
-              color="slate"
-            />
-            <MetricCard
-              title="6. CapEx Buildout"
-              value={formatCurrency(summary.totalCapexBuildout)}
-              subtitle="One-time (not in annual)"
-              color="red"
-            />
-          </div>
+            // Portfolio totals
+            const portfolioDivisor = bySqft
+              ? Math.max(summary.totalSqft, 1)
+              : atCap ? Math.max(summary.totalCapacity, 1) : Math.max(summary.totalEnrollment, 1);
 
-          {/* Category Breakdown Bar */}
-          <div className="bg-white rounded-lg shadow p-4 mb-6">
-            <div className="flex justify-between items-center mb-3">
-              <h2 className="font-semibold text-gray-800">Portfolio Cost Breakdown</h2>
-              <div className="text-sm text-gray-500">
-                Annual: {formatCurrency(summary.grandTotal)} | Excl. Lease:{' '}
-                {formatCurrency(summary.totalExcludingLease)}
-              </div>
-            </div>
-            <CategoryBar summary={summary} />
-          </div>
+            // Weighted average tuition for portfolio % display
+            const weightedTuition = schools.length > 0
+              ? schools.reduce((s, sc) => s + sc.tuition * (atCap ? sc.capacity : Math.max(sc.currentEnrollment, 1)), 0) / schools.reduce((s, sc) => s + (atCap ? sc.capacity : Math.max(sc.currentEnrollment, 1)), 0)
+              : 1;
 
-          {/* Category Detail Cards */}
-          <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-5 gap-4 mb-6">
-            {summary.categoryBreakdown.map((cat) => (
-              <div
-                key={cat.category}
-                className="bg-white rounded-lg shadow p-4 cursor-pointer hover:shadow-md transition-shadow"
-                onClick={() =>
-                  setExpandedCategory(expandedCategory === cat.category ? null : cat.category)
-                }
-              >
-                <div className="flex items-center gap-2 mb-2">
-                  <div className="w-3 h-3 rounded" style={{ backgroundColor: cat.color }} />
-                  <span className="font-medium text-gray-800 text-sm">{cat.category}</span>
-                </div>
-                <div className="text-xl font-bold">{formatCurrency(cat.amount)}</div>
-                <div className="text-xs text-gray-500">{cat.pctOfTotal.toFixed(1)}% of total</div>
+            // Cell helper: dollar + % of tuition underneath
+            const DollarPctCell = ({ val, tuition, bg, bold }: { val: number; tuition: number; bg?: string; bold?: boolean }) => (
+              <td className={`px-2 py-2 text-right ${bg || ''}`}>
+                <div className={bold ? 'font-semibold' : ''}>{fmt(val)}</div>
+                {showPct && <div className="text-[10px] text-slate-400">{pctFmt(val, tuition)}</div>}
+              </td>
+            );
 
-                {cat.subcategories && (
-                  <div className="mt-3 pt-3 border-t border-gray-100 space-y-1">
-                    {cat.subcategories
-                      .filter((sub) => sub.amount > 0)
-                      .sort((a, b) => b.amount - a.amount)
-                      .map((sub) => (
-                        <div key={sub.name} className="flex justify-between text-xs">
-                          <span className="text-gray-600">{sub.name}</span>
-                          <span className="font-medium">{formatCurrency(sub.amount)}</span>
-                        </div>
-                      ))}
-                  </div>
-                )}
-              </div>
-            ))}
-          </div>
+            // School type filter pills
+            const typeOptions: { key: SchoolType | 'all'; label: string }[] = [
+              { key: 'all', label: 'All' },
+              ...Object.entries(schoolTypeLabels).map(([k, l]) => ({ key: k as SchoolType, label: l })),
+            ];
 
-          {/* Portfolio KPIs */}
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
-            <MetricCard
-              title="Total Annual Cost"
-              value={formatCurrency(summary.grandTotal)}
-              subtitle={`${summary.totalSchools} schools analyzed`}
-            />
-            <MetricCard
-              title="Total Excl. Lease"
-              value={formatCurrency(summary.totalExcludingLease)}
-              subtitle="What you spend AFTER signing"
-              color="warning"
-            />
-            <MetricCard
-              title="Avg Cost per Student"
-              value={formatCurrency(summary.avgCostPerStudent)}
-              subtitle="At current enrollment"
-            />
-            <MetricCard
-              title="Portfolio Utilization"
-              value={`${summary.avgUtilization.toFixed(0)}%`}
-              subtitle={`${summary.totalEnrollment} / ${summary.totalCapacity} students`}
-              color={summary.avgUtilization < 50 ? 'danger' : 'default'}
-            />
-          </div>
-
-          {/* School Table */}
-          <div className="bg-white rounded-lg shadow overflow-hidden mb-6">
-            <div className="px-4 py-3 border-b bg-gray-50">
-              <h2 className="font-semibold text-gray-800">School-by-School Breakdown</h2>
-            </div>
-            <div className="overflow-x-auto">
-              <table className="min-w-full">
-                <thead className="bg-gray-50 border-b">
-                  <tr>
-                    <th
-                      className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase cursor-pointer hover:bg-gray-100"
-                      onClick={() => handleSort('displayName')}
-                    >
-                      School
-                    </th>
-                    <th className="px-3 py-3 text-center text-xs font-medium text-gray-500 uppercase">
-                      Enrollment
-                    </th>
-                    <th
-                      className="px-3 py-3 text-right text-xs font-medium text-gray-500 uppercase cursor-pointer hover:bg-gray-100"
-                      onClick={() => handleSort('grandTotal')}
-                    >
-                      Total
-                    </th>
-                    <th className="px-3 py-3 text-right text-xs font-medium text-gray-500 uppercase">
-                      Lease
-                    </th>
-                    <th className="px-3 py-3 text-right text-xs font-medium text-gray-500 uppercase">
-                      Fixed
-                    </th>
-                    <th className="px-3 py-3 text-right text-xs font-medium text-gray-500 uppercase">
-                      Variable
-                    </th>
-                    <th className="px-3 py-3 text-right text-xs font-medium text-gray-500 uppercase">
-                      Svc
-                    </th>
-                    <th className="px-3 py-3 text-right text-xs font-medium text-gray-500 uppercase">
-                      Depr.
-                    </th>
-                    <th className="px-3 py-3 text-right text-xs font-medium text-gray-500 uppercase">
-                      % Tuit.
-                    </th>
-                    <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase">
-                      Breakdown
-                    </th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-gray-200">
-                  {sortedSchools.map((school) => (
-                    <tr
-                      key={school.id}
-                      className="hover:bg-gray-50 cursor-pointer"
-                      onClick={() => setSelectedSchool(school)}
-                    >
-                      <td className="px-3 py-3">
-                        <div className="font-medium text-gray-900 text-sm">
-                          {school.displayName}
-                        </div>
-                        <div className="text-xs text-gray-500">
-                          {schoolTypeLabels[school.schoolType]} •{' '}
-                          ${school.tuition.toLocaleString()}
-                        </div>
-                      </td>
-                      <td className="px-3 py-3 text-center">
-                        <div className="text-sm">
-                          {school.currentEnrollment} / {school.capacity}
-                        </div>
-                        <UtilizationBadge rate={school.utilizationRate} />
-                      </td>
-                      <td className="px-3 py-3 text-right font-medium text-sm">
-                        {formatCurrency(school.costs.grandTotal)}
-                      </td>
-                      <td className="px-3 py-3 text-right text-blue-700 text-sm">
-                        {formatCurrency(school.costs.lease.total)}
-                      </td>
-                      <td className="px-3 py-3 text-right text-violet-700 text-sm">
-                        {formatCurrency(school.costs.fixedFacilities.total)}
-                      </td>
-                      <td className="px-3 py-3 text-right text-teal-700 text-sm">
-                        {formatCurrency(school.costs.variableFacilities.total)}
-                      </td>
-                      <td className="px-3 py-3 text-right text-orange-700 text-sm">
-                        {formatCurrency(school.costs.studentServices.total)}
-                      </td>
-                      <td className="px-3 py-3 text-right text-slate-700 text-sm">
-                        {formatCurrency(school.costs.annualDepreciation.total)}
-                      </td>
-                      <td className="px-3 py-3 text-right">
-                        <span
-                          className={`font-medium text-sm ${
-                            school.metrics.pctOfTuitionCurrent > 30
-                              ? 'text-red-600'
-                              : school.metrics.pctOfTuitionCurrent > 20
-                                ? 'text-amber-600'
-                                : 'text-gray-900'
+  return (
+              <div className="table-card rounded-xl overflow-hidden mb-6">
+                <div className="px-5 py-4 bg-slate-800 text-white">
+                  {/* Title row with type filter pills */}
+                  <div className="flex flex-wrap items-center gap-3 mb-3">
+                    <h2 className="font-semibold text-white mr-2">School-by-School</h2>
+                    <div className="flex flex-wrap gap-1">
+                      {typeOptions.map(opt => (
+            <button
+                          key={opt.key}
+                          onClick={() => setSchoolTypeFilter(opt.key)}
+                          className={`px-3 py-1 text-xs font-medium rounded-full transition-colors ${
+                            schoolTypeFilter === opt.key
+                              ? 'bg-blue-500 text-white'
+                              : 'bg-slate-600 text-slate-200 hover:bg-slate-500'
                           }`}
                         >
-                          {school.metrics.pctOfTuitionCurrent.toFixed(1)}%
-                        </span>
-                      </td>
-                      <td className="px-3 py-3 w-32">
-                        <SchoolCostBreakdown school={school} />
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+                          {opt.label}
+            </button>
+          ))}
+        </div>
+      </div>
+                  {/* Basis toggle */}
+                  <div className="flex items-center justify-between">
+                    <p className="text-xs text-slate-300">Category costs {basisLabel}. Click row for detail. Click headers to sort.</p>
+                    <div className="flex bg-slate-600/50 rounded-lg p-0.5">
+                      <button onClick={() => setOverviewBasis('current')} className={`px-3 py-1 text-xs font-medium rounded-md transition-colors ${overviewBasis === 'current' ? 'bg-blue-500 text-white shadow-sm' : 'text-slate-300 hover:text-white'}`}>Current</button>
+                      <button onClick={() => setOverviewBasis('capacity')} className={`px-3 py-1 text-xs font-medium rounded-md transition-colors ${overviewBasis === 'capacity' ? 'bg-blue-500 text-white shadow-sm' : 'text-slate-300 hover:text-white'}`}>Capacity</button>
+                      <button onClick={() => setOverviewBasis('sqft')} className={`px-3 py-1 text-xs font-medium rounded-md transition-colors ${overviewBasis === 'sqft' ? 'bg-blue-500 text-white shadow-sm' : 'text-slate-300 hover:text-white'}`}>Per Sq Ft</button>
+        </div>
             </div>
           </div>
+                <div className="overflow-x-auto">
+                  <table className="min-w-full text-sm border-collapse">
+                    {/* === Two-row header === */}
+                    <thead>
+                      {/* Group header row — sortable */}
+                      <tr className="bg-gray-100 border-b">
+                        <th className="px-2 py-1 text-left text-xs font-medium text-slate-400 sticky left-0 z-10 cursor-pointer select-none hover:bg-gray-200" rowSpan={2} style={{boxShadow: '2px 0 4px -2px rgba(0,0,0,0.06)'}} onClick={() => toggleSort(setOverviewSort)('name')}>School{overviewSort.key==='name'?(overviewSort.dir==='asc'?' ▲':' ▼'):''}</th>
+                        <th className="px-2 py-1 text-center text-xs font-medium text-slate-400 cursor-pointer select-none hover:bg-gray-200" rowSpan={2} onClick={() => toggleSort(setOverviewSort)('students')}>{basisColLabel}{overviewSort.key==='students'?(overviewSort.dir==='asc'?' ▲':' ▼'):''}</th>
+                        <th className="px-2 py-1 text-right text-xs font-medium text-blue-700 bg-blue-50 cursor-pointer select-none hover:bg-blue-100" rowSpan={2} onClick={() => toggleSort(setOverviewSort)('lease')}>Lease/Student{overviewSort.key==='lease'?(overviewSort.dir==='asc'?' ▲':' ▼'):''}</th>
+                        <th className="px-2 py-1 text-center text-xs font-bold text-slate-800 bg-slate-100 border-l border-slate-300" colSpan={4}>CapEx</th>
+                        <th className="px-2 py-1 text-center text-xs font-bold text-indigo-800 bg-indigo-50 border-l border-indigo-200 cursor-pointer select-none hover:bg-indigo-100" rowSpan={2} onClick={() => toggleSort(setOverviewSort)('leaseCapex')}>Lease+Capex{overviewSort.key==='leaseCapex'?(overviewSort.dir==='asc'?' ▲':' ▼'):''}</th>
+                        <th className="px-2 py-1 text-center text-xs font-bold text-emerald-800 bg-emerald-50 border-l border-emerald-200" colSpan={4}>Facilities Costs / Student</th>
+                        <th className="px-2 py-1 text-center text-xs font-bold text-indigo-900 bg-indigo-100 border-l-2 border-indigo-300 cursor-pointer select-none hover:bg-indigo-200" rowSpan={2} onClick={() => toggleSort(setOverviewSort)('total')}>Total{overviewSort.key==='total'?(overviewSort.dir==='asc'?' ▲':' ▼'):''}<br/><span className="font-normal text-[10px] text-indigo-500">(ex-HC)</span></th>
+                      </tr>
+                      {/* Detail header row */}
+                      <tr className="bg-gray-50 border-b">
+                        {/* CapEx sub-headers */}
+                        <th className="px-2 py-1.5 text-right text-[11px] font-medium text-slate-600 bg-slate-50 border-l border-slate-300">Total</th>
+                        <th className="px-2 py-1.5 text-center text-[11px] font-medium text-slate-600 bg-slate-50">Depr Period</th>
+                        <th className="px-2 py-1.5 text-right text-[11px] font-medium text-slate-600 bg-slate-50">Annual</th>
+                        <th className="px-2 py-1.5 text-right text-[11px] font-medium text-slate-700 bg-slate-100">Per Student</th>
+                        {/* Facilities sub-headers */}
+                        <th className="px-2 py-1.5 text-right text-[11px] font-medium text-violet-700 bg-violet-50 border-l border-emerald-200">Fixed</th>
+                        <th className="px-2 py-1.5 text-right text-[11px] font-medium text-teal-700 bg-teal-50">Variable</th>
+                        <th className="px-2 py-1.5 text-right text-[11px] font-medium text-orange-700 bg-orange-50">Student Svc</th>
+                        <th className="px-2 py-1.5 text-right text-[11px] font-medium text-emerald-800 bg-emerald-100">Total</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-200">
+                      {sorted.map((school, idx) => {
+                        const div = getDivisor(school);
+                        const tuition = school.tuition;
+                        const leasePerUnit = school.costs.lease.total / div;
+                        const totalCapex = school.costs.capexBuildout;
+                        const annualDepr = school.costs.annualDepreciation.total;
+                        const deprPeriod = annualDepr > 0 ? totalCapex / annualDepr : 0;
+                        const capexPerUnit = annualDepr / div;
+                        const leaseCapex = leasePerUnit + capexPerUnit;
+                        const fixedFac = school.costs.fixedFacilities.total / div;
+                        const varFac = school.costs.variableFacilities.total / div;
+                        const svc = school.costs.studentServices.total / div;
+                        const facTotal = fixedFac + varFac + svc;
+                        const basisVal = bySqft ? school.sqft : atCap ? school.capacity : school.currentEnrollment;
 
-          {/* Expense Behavior Rules */}
-          <div className="bg-white rounded-lg shadow p-6 mb-6">
-            <div className="flex justify-between items-center mb-4">
-              <h2 className="text-lg font-semibold">Expense Behavior by Category</h2>
-              <div className="text-sm text-gray-500">
-                Preset: <strong>{presetLabels[expensePreset]}</strong>
-              </div>
-            </div>
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
-              {currentExpenseRules.map((rule) => {
-                const ruleCategoryColors: Record<string, string> = {
-                  lease: 'border-blue-200 bg-blue-50',
-                  'fixed-facilities': 'border-violet-200 bg-violet-50',
-                  'variable-facilities': 'border-teal-200 bg-teal-50',
-                  'student-services': 'border-orange-200 bg-orange-50',
-                  'annual-depreciation': 'border-slate-200 bg-slate-50',
-                };
-                return (
-                  <div
-                    key={rule.id}
-                    className={`border rounded p-3 ${ruleCategoryColors[rule.category] || 'border-gray-200 bg-gray-50'}`}
-                  >
-                    <div className="flex justify-between items-start mb-2">
-                      <span className="font-medium text-gray-900 text-sm">{rule.name}</span>
-                      <span
-                        className={`text-xs px-2 py-0.5 rounded ${
-                          rule.costType === 'fixed'
-                            ? 'bg-red-100 text-red-800'
-                            : rule.costType === 'variable'
-                              ? 'bg-green-100 text-green-800'
-                              : 'bg-amber-100 text-amber-800'
-                        }`}
-                      >
-                        {rule.costType}
-                      </span>
-                    </div>
-                    <div className="flex gap-3 text-xs text-gray-500 mb-2">
-                      <span>Fixed: {(rule.fixedPercent * 100).toFixed(0)}%</span>
-                      <span>Var: {(rule.variablePercent * 100).toFixed(0)}%</span>
-                    </div>
-                    <div className="text-xs text-gray-600">{rule.description}</div>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-
-          {/* Key Insights */}
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 mb-6">
-            {insights.map((insight) => (
-              <div
-                key={insight.id}
-                className={`rounded-lg p-4 ${
-                  insight.category === 'fixed-cost-warning'
-                    ? 'bg-amber-50 border border-amber-200'
-                    : insight.category === 'opportunity'
-                      ? 'bg-green-50 border border-green-200'
-                      : 'bg-blue-50 border border-blue-200'
-                }`}
-              >
-                <div className="flex items-start gap-3">
-                  <div
-                    className={`text-lg ${
-                      insight.category === 'fixed-cost-warning'
-                        ? 'text-amber-500'
-                        : insight.category === 'opportunity'
-                          ? 'text-green-500'
-                          : 'text-blue-500'
-                    }`}
-                  >
-                    {insight.category === 'fixed-cost-warning'
-                      ? '⚠'
-                      : insight.category === 'opportunity'
-                        ? '↑'
-                        : 'ℹ'}
-                  </div>
-                  <div>
-                    <div className="font-medium text-gray-900">{insight.title}</div>
-                    <div className="text-sm text-gray-600 mt-1">{insight.description}</div>
-                    {insight.metric !== undefined && (
-                      <div className="text-sm font-semibold mt-2">
-                        {typeof insight.metric === 'number' && insight.metric >= 1000
-                          ? formatCurrency(insight.metric)
-                          : insight.metric}
-                        {insight.unit && ` ${insight.unit}`}
-                      </div>
-                    )}
-                  </div>
+                        return (
+                          <tr key={school.id} className={`hover:bg-slate-700/40 cursor-pointer `} onClick={() => setSelectedSchool(school)}>
+                            <td className={`px-2 py-2 sticky left-0 z-10 ${idx % 2 === 1 ? '' : ''}`} style={{boxShadow: '2px 0 4px -2px rgba(0,0,0,0.06)'}}>
+                              <div className="font-medium text-slate-100 text-sm">{school.displayName}</div>
+                              <div className="text-[11px] text-slate-400">
+                                {schoolTypeLabels[school.schoolType]} | ${tuition.toLocaleString()} |{' '}
+                                <span className={school.isOperating ? 'text-green-400' : 'text-slate-500'}>{school.isOperating ? 'Operating' : 'Pre-Opening'}</span>
+                </div>
+                            </td>
+                            <td className="px-2 py-2 text-center text-sm">{basisVal.toLocaleString()}</td>
+                            {/* Lease */}
+                            <DollarPctCell val={leasePerUnit} tuition={tuition} bg="bg-blue-50/30" />
+                            {/* CapEx group */}
+                            <td className="px-2 py-2 text-right text-red-400 border-l border-slate-200">{formatCurrency(totalCapex)}</td>
+                            <td className="px-2 py-2 text-center text-slate-600">{deprPeriod > 0 ? `${deprPeriod.toFixed(0)} yr` : '—'}</td>
+                            <td className="px-2 py-2 text-right text-slate-700">{formatCurrency(annualDepr)}</td>
+                            <DollarPctCell val={capexPerUnit} tuition={tuition} bg="bg-slate-50/40" bold />
+                            {/* Lease + Capex */}
+                            <DollarPctCell val={leaseCapex} tuition={tuition} bg="bg-indigo-50/30" bold />
+                            {/* Facilities group */}
+                            <DollarPctCell val={fixedFac} tuition={tuition} bg="bg-violet-50/20" />
+                            <DollarPctCell val={varFac} tuition={tuition} bg="bg-teal-50/20" />
+                            <DollarPctCell val={svc} tuition={tuition} bg="bg-orange-50/20" />
+                            <DollarPctCell val={facTotal} tuition={tuition} bg="bg-emerald-50/30" bold />
+                            {/* Grand Total = answer column */}
+                            <DollarPctCell val={leaseCapex + facTotal} tuition={tuition} bg="answer-glow" bold />
+                          </tr>
+                        );
+                      })}
+                      {/* Portfolio Total Row */}
+                      {(() => {
+                        const pLease = summary.totalLease / portfolioDivisor;
+                        const pAnnDepr = summary.totalAnnualDepreciation / portfolioDivisor;
+                        const pLeaseCapex = pLease + pAnnDepr;
+                        const pFixed = summary.totalFixedFacilities / portfolioDivisor;
+                        const pVar = summary.totalVariableFacilities / portfolioDivisor;
+                        const pSvc = summary.totalStudentServices / portfolioDivisor;
+                        const pFacTotal = pFixed + pVar + pSvc;
+                        const pDeprPeriod = summary.totalAnnualDepreciation > 0 ? summary.totalCapexBuildout / summary.totalAnnualDepreciation : 0;
+                        const pTuition = weightedTuition;
+                        return (
+                          <tr className="bg-gray-100 font-bold border-t-2 border-gray-400">
+                            <td className="px-2 py-3">PORTFOLIO</td>
+                            <td className="px-2 py-3 text-center">{(bySqft ? summary.totalSqft : atCap ? summary.totalCapacity : summary.totalEnrollment).toLocaleString()}</td>
+                            <DollarPctCell val={pLease} tuition={pTuition} bg="bg-blue-100/40" />
+                            <td className="px-2 py-3 text-right text-red-400 border-l border-slate-300">{formatCurrency(summary.totalCapexBuildout)}</td>
+                            <td className="px-2 py-3 text-center text-slate-600">{pDeprPeriod > 0 ? `${pDeprPeriod.toFixed(0)} yr` : '—'}</td>
+                            <td className="px-2 py-3 text-right text-slate-700">{formatCurrency(summary.totalAnnualDepreciation)}</td>
+                            <DollarPctCell val={pAnnDepr} tuition={pTuition} bg="bg-slate-100/50" bold />
+                            <DollarPctCell val={pLeaseCapex} tuition={pTuition} bg="bg-indigo-100/40" bold />
+                            <DollarPctCell val={pFixed} tuition={pTuition} bg="bg-violet-100/30" />
+                            <DollarPctCell val={pVar} tuition={pTuition} bg="bg-teal-100/30" />
+                            <DollarPctCell val={pSvc} tuition={pTuition} bg="bg-orange-100/30" />
+                            <DollarPctCell val={pFacTotal} tuition={pTuition} bg="bg-emerald-100/40" bold />
+                            <DollarPctCell val={pLeaseCapex + pFacTotal} tuition={pTuition} bg="answer-glow" bold />
+                          </tr>
+                        );
+                      })()}
+                    </tbody>
+                  </table>
                 </div>
               </div>
-            ))}
+            );
+          })()}
+
+          {/* Pie Charts: collapsible */}
+          <div className="mb-4">
+            <button onClick={() => setShowCharts(!showCharts)} className="text-xs text-blue-400 hover:text-blue-300 font-medium flex items-center gap-1 bg-slate-800/50 px-3 py-1.5 rounded-lg">
+              {showCharts ? '▼ Hide Charts' : '▶ Show Cost Breakdown Charts'}
+            </button>
+            </div>
+          {showCharts && <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
+            {/* Facilities Costs Pie */}
+            {(() => {
+              const leaseCapexDepr = summary.totalLease + summary.totalAnnualDepreciation;
+              const facFixed = summary.totalFixedFacilities;
+              const facVariable = summary.totalVariableFacilities + summary.totalStudentServices;
+              const facData = [
+                { name: 'Lease + Capex (Depr.)', value: leaseCapexDepr, color: '#1e40af' },
+                { name: 'Facilities Fixed', value: facFixed, color: '#7c3aed' },
+                { name: 'Facilities Variable (incl. Student Svc)', value: facVariable, color: '#0d9488' },
+              ];
+              const renderLabel = ({ percent }: { percent: number }) =>
+                `${(percent * 100).toFixed(0)}%`;
+              return (
+                <div className="bg-slate-800 border border-slate-700 rounded-xl p-4 text-white">
+                  <div className="flex items-center justify-between mb-1">
+                    <div className="font-semibold text-white">Facilities Costs</div>
+                    <div className="text-xs text-slate-400">{formatCurrency(leaseCapexDepr + facFixed + facVariable)} total</div>
+          </div>
+                  <div className="h-64 overflow-visible">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <PieChart margin={{ top: 20, right: 20, bottom: 20, left: 20 }}>
+                        <Pie data={facData} dataKey="value" cx="50%" cy="50%" outerRadius={75} innerRadius={35} label={renderLabel} labelLine={false}>
+                          {facData.map((entry, idx) => <Cell key={idx} fill={entry.color} />)}
+                        </Pie>
+                        <Tooltip formatter={(value: number) => formatCurrency(value)} />
+                      </PieChart>
+                    </ResponsiveContainer>
+              </div>
+                  <div className="flex flex-wrap gap-x-5 gap-y-1 text-xs justify-center">
+                    {facData.map(d => (
+                      <div key={d.name} className="flex items-center gap-1.5">
+                        <div className="w-3 h-3 rounded" style={{ backgroundColor: d.color }} />
+                        <span className="text-slate-300">{d.name}</span>
+                        <span className="font-semibold">{formatCurrency(d.value)}</span>
+                  </div>
+                ))}
+                </div>
+              </div>
+              );
+            })()}
+
+            {/* Annual Cost Breakdown Pie */}
+            {(() => {
+              const costData = summary.categoryBreakdown.map(cat => ({
+                name: cat.category,
+                value: cat.amount,
+                color: cat.color,
+              }));
+              costData.push({ name: 'CapEx Buildout', value: summary.totalCapexBuildout, color: '#dc2626' });
+              const renderLabel = ({ percent }: { percent: number }) =>
+                percent > 0.05 ? `${(percent * 100).toFixed(0)}%` : '';
+              return (
+                <div className="bg-slate-800 border border-slate-700 rounded-xl p-4 text-white">
+                  <div className="flex items-center justify-between mb-1">
+                    <div className="font-semibold text-white">Annual Cost Breakdown</div>
+                    <div className="text-sm text-slate-400">{formatCurrency(summary.grandTotal)} annual + {formatCurrency(summary.totalCapexBuildout)} CapEx</div>
+            </div>
+                  <div className="h-64 overflow-visible">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <PieChart margin={{ top: 20, right: 20, bottom: 20, left: 20 }}>
+                        <Pie data={costData} dataKey="value" cx="50%" cy="50%" outerRadius={75} innerRadius={35} label={renderLabel} labelLine={false}>
+                          {costData.map((entry, idx) => <Cell key={idx} fill={entry.color} />)}
+                        </Pie>
+                        <Tooltip formatter={(value: number) => formatCurrency(value)} />
+                      </PieChart>
+                    </ResponsiveContainer>
+            </div>
+                  <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs justify-center">
+                    {costData.map(d => (
+                      <div key={d.name} className="flex items-center gap-1.5">
+                        <div className="w-3 h-3 rounded-sm" style={{ backgroundColor: d.color }} />
+                        <span className="text-slate-300">{d.name}</span>
+                        <span className="font-semibold">{formatCurrency(d.value)}</span>
+            </div>
+                    ))}
+            </div>
+          </div>
+              );
+            })()}
+          </div>}
+
+          {/* Headline KPIs — at bottom */}
+          <div className="bg-slate-800 rounded-xl p-5 mb-6 text-white shadow-lg">
+            <div className="grid grid-cols-5 gap-6">
+              <div>
+                <div className="text-xs text-slate-400 font-medium uppercase tracking-wide">Annual Fac. Cost</div>
+                <div className="text-2xl font-bold text-white mt-1">{formatCurrency(summary.grandTotal)}</div>
+                <div className="text-xs text-slate-500">{costVsRevenuePct}% of current revenue</div>
+              </div>
+              <div>
+                <div className="text-xs text-slate-400 font-medium uppercase tracking-wide">Current Revenue</div>
+                <div className="text-2xl font-bold text-green-400 mt-1">{formatCurrency(summary.totalRevenueCurrent)}</div>
+                <div className="text-xs text-slate-500">{summary.totalEnrollment} students enrolled</div>
+            </div>
+              <div>
+                <div className="text-xs text-slate-400 font-medium uppercase tracking-wide">Utilization</div>
+                <div className={`text-2xl font-bold mt-1 ${summary.avgUtilization < 50 ? 'text-red-400' : 'text-amber-400'}`}>{summary.avgUtilization.toFixed(0)}%</div>
+                <div className="text-xs text-slate-500">{emptySeats.toLocaleString()} empty seats</div>
+            </div>
+            <div>
+                <div className="text-xs text-slate-400 font-medium uppercase tracking-wide">CapEx Overrun</div>
+                <div className={`text-2xl font-bold mt-1 ${summary.totalCapexDelta > 0 ? 'text-red-400' : 'text-green-400'}`}>
+                  {summary.totalCapexDelta > 0 ? '+' : ''}{formatCurrency(summary.totalCapexDelta)}
+                      </div>
+                <div className="text-xs text-slate-500">{summary.totalCapexDeltaPct > 0 ? '+' : ''}{summary.totalCapexDeltaPct.toFixed(0)}% vs approved</div>
+                  </div>
+              <div>
+                <div className="text-xs text-slate-400 font-medium uppercase tracking-wide">Revenue at Capacity</div>
+                <div className="text-2xl font-bold text-blue-400 mt-1">{formatCurrency(summary.totalRevenueAtCapacity)}</div>
+                <div className="text-xs text-slate-500">Fac = {summary.totalRevenueAtCapacity > 0 ? ((summary.grandTotal / summary.totalRevenueAtCapacity) * 100).toFixed(0) : 0}% at cap</div>
+              </div>
+            </div>
           </div>
         </>
       )}
 
-      {/* School Detail Drawer */}
+      </div>
+
+      {/* School Detail Drawer — Verdict-led */}
       {selectedSchool && (
-        <div className="fixed inset-y-0 right-0 w-96 bg-white shadow-xl z-50 overflow-y-auto">
+        <div className="fixed inset-y-0 right-0 w-[420px] bg-slate-900 text-slate-200 shadow-xl z-50 overflow-y-auto border-l border-slate-700">
           <div className="p-6">
-            <div className="flex justify-between items-start mb-6">
+            {/* Header with Verdict */}
+            <div className="flex justify-between items-start mb-2">
               <div>
-                <h2 className="text-xl font-bold">{selectedSchool.displayName}</h2>
-                <div className="text-sm text-gray-500">
-                  {selectedSchool.currentEnrollment} / {selectedSchool.capacity} students (
-                  {(selectedSchool.utilizationRate * 100).toFixed(0)}% utilization)
+                <h2 className="text-xl font-bold text-white">{selectedSchool.displayName}</h2>
+                <div className="text-sm text-slate-400">
+                  {schoolTypeLabels[selectedSchool.schoolType]} | ${selectedSchool.tuition.toLocaleString()} tuition
                 </div>
               </div>
-              <button
-                onClick={() => setSelectedSchool(null)}
-                className="text-gray-400 hover:text-gray-600 text-xl"
-              >
-                ×
+              <button onClick={() => setSelectedSchool(null)} className="text-slate-400 hover:text-white text-xl">
+                x
               </button>
             </div>
 
-            <div className="space-y-6">
-              {/* Total Summary */}
-              <div className="grid grid-cols-2 gap-4">
-                <div className="bg-gray-50 rounded p-3">
-                  <div className="text-xs text-gray-500">Total Annual</div>
-                  <div className="text-lg font-bold">
-                    {formatCurrency(selectedSchool.costs.grandTotal)}
+            {/* Verdict Banner */}
+            <div className={`rounded-lg p-4 mb-6 ${
+              selectedSchool.healthScore === 'green' ? 'bg-green-900/30 border border-green-700' :
+              selectedSchool.healthScore === 'yellow' ? 'bg-amber-900/30 border border-amber-700' :
+              selectedSchool.healthScore === 'red' ? 'bg-red-900/30 border border-red-700' :
+              'bg-slate-800 border border-slate-700'
+            }`}>
+              <div className="flex items-center gap-2 mb-2">
+                <HealthBadge score={selectedSchool.healthScore} verdict={selectedSchool.healthVerdict} />
+                <span className="text-sm text-slate-300">
+                  {(selectedSchool.utilizationRate * 100).toFixed(0)}% utilized
+                  {selectedSchool.isOperating && selectedSchool.breakeven.pctAt100Capacity <= selectedSchool.targetPct
+                    ? ` | ${selectedSchool.targetPct}% target reachable at capacity`
+                    : selectedSchool.isOperating
+                      ? ` | ${selectedSchool.targetPct}% target NOT reachable at capacity`
+                      : ''
+                  }
+                </span>
+              </div>
+              {selectedSchool.isOperating && (
+                <div className="text-sm text-gray-700 space-y-1">
+                  <div>
+                    Current: {selectedSchool.currentEnrollment} students | {formatCurrency(selectedSchool.costs.grandTotal)} cost | {selectedSchool.metrics.pctOfTuitionCurrent.toFixed(0)}% of tuition
+                  </div>
+                  <div>
+                    At capacity: {selectedSchool.capacity} students | {selectedSchool.breakeven.pctAt100Capacity.toFixed(0)}% of tuition
+                  </div>
+                  <div>
+                    Revenue opportunity: <strong>{formatCurrency(selectedSchool.revenue.revenueGap)}</strong>
+                  </div>
+                  <div>
+                    Marginal cost/student: <strong>{formatCurrency(selectedSchool.marginalCostPerStudent)}</strong>
                   </div>
                 </div>
-                <div className="bg-amber-50 rounded p-3">
-                  <div className="text-xs text-gray-500">Excl. Lease</div>
-                  <div className="text-lg font-bold">
-                    {formatCurrency(selectedSchool.costs.totalExcludingLease)}
+              )}
+            </div>
+
+            <div className="space-y-6">
+              {/* Sunk vs Controllable */}
+              <div>
+                <h3 className="font-medium mb-3">Cost Controllability</h3>
+                <div className="flex h-4 rounded-lg overflow-hidden mb-2">
+                  <div
+                    className="bg-gray-400"
+                    style={{ width: `${selectedSchool.costs.grandTotal > 0 ? (selectedSchool.sunkCosts / selectedSchool.costs.grandTotal) * 100 : 0}%` }}
+                    title="Sunk"
+                  />
+                  <div
+                    className="bg-blue-500"
+                    style={{ width: `${selectedSchool.costs.grandTotal > 0 ? (selectedSchool.controllableCosts / selectedSchool.costs.grandTotal) * 100 : 0}%` }}
+                    title="Controllable"
+                  />
+                </div>
+                <div className="grid grid-cols-2 gap-3 text-sm">
+                  <div className="bg-slate-800 rounded p-2">
+                    <div className="text-xs text-slate-400">Sunk (Lease + Depr)</div>
+                    <div className="font-bold">{formatCurrency(selectedSchool.sunkCosts)}</div>
+                  </div>
+                  <div className="bg-blue-900/30 rounded p-2">
+                    <div className="text-xs text-slate-400">Controllable</div>
+                    <div className="font-bold">{formatCurrency(selectedSchool.controllableCosts)}</div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Revenue Context */}
+              <div>
+                <h3 className="font-medium mb-3">Revenue Context</h3>
+                <div className="grid grid-cols-3 gap-3 text-sm">
+                  <div className="bg-green-900/30 rounded p-2">
+                    <div className="text-xs text-slate-400">Current</div>
+                    <div className="font-bold text-green-400">{formatCurrency(selectedSchool.revenue.current)}</div>
+                  </div>
+                  <div className="bg-green-900/30 rounded p-2">
+                    <div className="text-xs text-slate-400">At Capacity</div>
+                    <div className="font-bold text-green-400">{formatCurrency(selectedSchool.revenue.atCapacity)}</div>
+                  </div>
+                  <div className="bg-amber-900/30 rounded p-2">
+                    <div className="text-xs text-slate-400">Gap</div>
+                    <div className="font-bold text-amber-700">{formatCurrency(selectedSchool.revenue.revenueGap)}</div>
                   </div>
                 </div>
               </div>
@@ -1639,188 +1633,102 @@ const FacilitiesCapexDashboard: React.FC = () => {
               {/* 6-Category Breakdown */}
               <div>
                 <h3 className="font-medium mb-3">6-Category Breakdown</h3>
-                <div className="space-y-3">
-                  {/* Lease */}
-                  <div className="border-l-4 border-blue-600 pl-3 py-1">
-                    <div className="flex justify-between">
-                      <span className="font-medium text-blue-800">1. Lease</span>
-                      <span className="font-bold">
-                        {formatCurrency(selectedSchool.costs.lease.total)}
-                      </span>
-                    </div>
-                    <div className="text-xs text-gray-500 mt-1">
-                      Rent: {formatCurrency(selectedSchool.costs.lease.rent)}
-                    </div>
-                  </div>
-
-                  {/* Fixed Facilities */}
-                  <div className="border-l-4 border-violet-600 pl-3 py-1">
-                    <div className="flex justify-between">
-                      <span className="font-medium text-violet-800">2. Fixed Facilities</span>
-                      <span className="font-bold">
-                        {formatCurrency(selectedSchool.costs.fixedFacilities.total)}
-                      </span>
-                    </div>
-                    <div className="text-xs text-gray-500 mt-1 space-y-0.5">
-                      {selectedSchool.costs.fixedFacilities.security > 0 && (
-                        <div>
-                          Security:{' '}
-                          {formatCurrency(selectedSchool.costs.fixedFacilities.security)}
+                <div className="space-y-2">
+                  {[
+                    { name: '1. Lease', value: selectedSchool.costs.lease.total, color: 'border-blue-600', subs: [{ n: 'Rent', v: selectedSchool.costs.lease.rent }] },
+                    { name: '2. Fixed Facilities', value: selectedSchool.costs.fixedFacilities.total, color: 'border-violet-600', subs: [
+                      { n: 'Security', v: selectedSchool.costs.fixedFacilities.security },
+                      { n: 'IT Maintenance', v: selectedSchool.costs.fixedFacilities.itMaintenance },
+                      { n: 'Landscaping', v: selectedSchool.costs.fixedFacilities.landscaping },
+                    ]},
+                    { name: '3. Variable Facilities', value: selectedSchool.costs.variableFacilities.total, color: 'border-teal-600', subs: [
+                      { n: 'Repairs', v: selectedSchool.costs.variableFacilities.repairs },
+                      { n: 'Utilities', v: selectedSchool.costs.variableFacilities.utilities },
+                      { n: 'Janitorial', v: selectedSchool.costs.variableFacilities.janitorial },
+                    ]},
+                    { name: '4. Student Services', value: selectedSchool.costs.studentServices.total, color: 'border-orange-600', subs: [
+                      { n: 'Food Services', v: selectedSchool.costs.studentServices.foodServices },
+                      { n: 'Transportation', v: selectedSchool.costs.studentServices.transportation },
+                    ]},
+                    { name: '5. Annual Depreciation', value: selectedSchool.costs.annualDepreciation.total, color: 'border-slate-600', subs: [
+                      { n: 'Depreciation', v: selectedSchool.costs.annualDepreciation.depreciation },
+                    ]},
+                    { name: '6. CapEx Buildout', value: selectedSchool.costs.capexBuildout, color: 'border-red-600', subs: [] },
+                  ].map((cat) => (
+                    <div key={cat.name} className={`border-l-4 ${cat.color} pl-3 py-1`}>
+                      <div className="flex justify-between text-sm">
+                        <span className="font-medium">{cat.name}</span>
+                        <span className="font-bold">{formatCurrency(cat.value)}</span>
+                      </div>
+                      {cat.subs.filter((s) => s.v > 0).map((s) => (
+                        <div key={s.n} className="flex justify-between text-xs text-slate-400 mt-0.5">
+                          <span>{s.n}</span>
+                          <span>{formatCurrency(s.v)}</span>
                         </div>
-                      )}
-                      {selectedSchool.costs.fixedFacilities.itMaintenance > 0 && (
-                        <div>
-                          IT Maintenance:{' '}
-                          {formatCurrency(selectedSchool.costs.fixedFacilities.itMaintenance)}
-                        </div>
-                      )}
-                      {selectedSchool.costs.fixedFacilities.landscaping > 0 && (
-                        <div>
-                          Landscaping:{' '}
-                          {formatCurrency(selectedSchool.costs.fixedFacilities.landscaping)}
-                        </div>
-                      )}
+                      ))}
                     </div>
-                  </div>
-
-                  {/* Variable Facilities */}
-                  <div className="border-l-4 border-teal-600 pl-3 py-1">
-                    <div className="flex justify-between">
-                      <span className="font-medium text-teal-800">3. Variable Facilities</span>
-                      <span className="font-bold">
-                        {formatCurrency(selectedSchool.costs.variableFacilities.total)}
-                      </span>
-                    </div>
-                    <div className="text-xs text-gray-500 mt-1 space-y-0.5">
-                      {selectedSchool.costs.variableFacilities.repairs > 0 && (
-                        <div>
-                          Repairs:{' '}
-                          {formatCurrency(selectedSchool.costs.variableFacilities.repairs)}
-                        </div>
-                      )}
-                      {selectedSchool.costs.variableFacilities.utilities > 0 && (
-                        <div>
-                          Utilities:{' '}
-                          {formatCurrency(selectedSchool.costs.variableFacilities.utilities)}
-                        </div>
-                      )}
-                      {selectedSchool.costs.variableFacilities.janitorial > 0 && (
-                        <div>
-                          Janitorial:{' '}
-                          {formatCurrency(selectedSchool.costs.variableFacilities.janitorial)}
-                        </div>
-                      )}
-                    </div>
-                  </div>
-
-                  {/* Student Services */}
-                  <div className="border-l-4 border-orange-600 pl-3 py-1">
-                    <div className="flex justify-between">
-                      <span className="font-medium text-orange-800">4. Student Services</span>
-                      <span className="font-bold">
-                        {formatCurrency(selectedSchool.costs.studentServices.total)}
-                      </span>
-                    </div>
-                    <div className="text-xs text-gray-500 mt-1 space-y-0.5">
-                      {selectedSchool.costs.studentServices.foodServices > 0 && (
-                        <div>
-                          Food Services:{' '}
-                          {formatCurrency(selectedSchool.costs.studentServices.foodServices)}
-                        </div>
-                      )}
-                      {selectedSchool.costs.studentServices.transportation > 0 && (
-                        <div>
-                          Transportation:{' '}
-                          {formatCurrency(selectedSchool.costs.studentServices.transportation)}
-                        </div>
-                      )}
-                    </div>
-                  </div>
-
-                  {/* Annual Depreciation */}
-                  <div className="border-l-4 border-slate-600 pl-3 py-1">
-                    <div className="flex justify-between">
-                      <span className="font-medium text-slate-800">5. Annual Depreciation</span>
-                      <span className="font-bold">
-                        {formatCurrency(selectedSchool.costs.annualDepreciation.total)}
-                      </span>
-                    </div>
-                    <div className="text-xs text-gray-500 mt-1">
-                      Amortized CapEx:{' '}
-                      {formatCurrency(selectedSchool.costs.annualDepreciation.depreciation)}
-                    </div>
-                  </div>
-
-                  {/* CapEx Buildout */}
-                  <div className="border-l-4 border-red-600 pl-3 py-1">
-                    <div className="flex justify-between">
-                      <span className="font-medium text-red-800">6. CapEx Buildout</span>
-                      <span className="font-bold">
-                        {formatCurrency(selectedSchool.costs.capexBuildout)}
-                      </span>
-                    </div>
-                    <div className="text-xs text-gray-500 mt-1">
-                      One-time cost (not in annual total)
-                    </div>
-                  </div>
+                  ))}
                 </div>
               </div>
 
-              {/* Budget Comparison */}
+              {/* Budget: Net Fac Fees */}
               <div>
-                <h3 className="font-medium mb-3">Budget vs Actual</h3>
+                <h3 className="font-medium mb-3">Net Facilities Fees — Budget</h3>
                 <div className="space-y-2 text-sm">
                   <div className="flex justify-between">
-                    <span className="text-gray-600">Model $/Student:</span>
-                    <span className="font-medium">
-                      {formatCurrency(selectedSchool.budget.modelCostPerStudent)}
+                    <span className="text-slate-300">Model $/Seat:</span>
+                    <span className="font-medium">{formatCurrency(selectedSchool.budget.modelNetFacPerStudent)}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-slate-300">Actual $/Seat:</span>
+                    <span className="font-medium">{formatCurrency(selectedSchool.budget.actualNetFacPerStudent)}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-slate-300">Delta/Seat:</span>
+                    <span className={`font-medium ${selectedSchool.budget.netFacDelta > 0 ? 'text-red-400' : 'text-green-400'}`}>
+                      {selectedSchool.budget.netFacDelta > 0 ? '+' : ''}{formatCurrency(selectedSchool.budget.netFacDelta)}
                     </span>
                   </div>
                   <div className="flex justify-between">
-                    <span className="text-gray-600">Actual $/Student:</span>
-                    <span className="font-medium">
-                      {formatCurrency(selectedSchool.budget.actualCostPerStudent)}
-                    </span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-gray-600">Delta:</span>
-                    <span
-                      className={`font-medium ${selectedSchool.budget.delta > 0 ? 'text-red-600' : 'text-green-600'}`}
-                    >
-                      {selectedSchool.budget.delta > 0 ? '+' : ''}
-                      {formatCurrency(selectedSchool.budget.delta)}
+                    <span className="text-slate-300">Total Variance:</span>
+                    <span className={`font-bold ${selectedSchool.budget.totalVariance > 0 ? 'text-red-400' : 'text-green-400'}`}>
+                      {selectedSchool.budget.totalVariance > 0 ? '+' : ''}{formatCurrency(selectedSchool.budget.totalVariance)}
                     </span>
                   </div>
                 </div>
               </div>
 
-              {/* Per-Student Metrics */}
+              {/* CapEx Budget vs Actual */}
               <div>
-                <h3 className="font-medium mb-3">Per-Student Analysis</h3>
+                <h3 className="font-medium mb-3">CapEx — Budget vs Actual</h3>
                 <div className="space-y-2 text-sm">
                   <div className="flex justify-between">
-                    <span className="text-gray-600">$/Student (Current):</span>
-                    <span className="font-medium">
-                      {formatCurrency(selectedSchool.metrics.costPerStudentCurrent)}
-                    </span>
+                    <span className="text-slate-300">Approved Budget:</span>
+                    <span className="font-medium">{selectedSchool.budget.capexBudget > 0 ? formatCurrency(selectedSchool.budget.capexBudget) : <span className="text-slate-500">No model</span>}</span>
                   </div>
                   <div className="flex justify-between">
-                    <span className="text-gray-600">$/Student (At Capacity):</span>
-                    <span className="font-medium text-green-600">
-                      {formatCurrency(selectedSchool.metrics.costPerStudentCapacity)}
-                    </span>
+                    <span className="text-slate-300">Actual Buildout:</span>
+                    <span className="font-medium text-red-400">{formatCurrency(selectedSchool.budget.capexBuildout)}</span>
+                  </div>
+                  {selectedSchool.budget.capexBudget > 0 && (
+                    <div className="flex justify-between">
+                      <span className="text-slate-300">Variance:</span>
+                      <span className={`font-bold ${selectedSchool.budget.capexDelta > 0 ? 'text-red-400' : 'text-green-400'}`}>
+                        {selectedSchool.budget.capexDelta > 0 ? '+' : ''}{formatCurrency(selectedSchool.budget.capexDelta)} ({selectedSchool.budget.capexDelta > 0 ? '+' : ''}{selectedSchool.budget.capexDeltaPct.toFixed(0)}%)
+                      </span>
+                    </div>
+                  )}
+                  <div className="flex justify-between">
+                    <span className="text-slate-300">CapEx / Seat:</span>
+                    <span className="font-medium">{formatCurrency(selectedSchool.budget.capexPerSeat)}</span>
                   </div>
                   <div className="flex justify-between">
-                    <span className="text-gray-600">% of Tuition (Current):</span>
-                    <span className="font-medium">
-                      {selectedSchool.metrics.pctOfTuitionCurrent.toFixed(1)}%
-                    </span>
+                    <span className="text-slate-300">Annual Depreciation:</span>
+                    <span className="font-medium text-slate-700">{formatCurrency(selectedSchool.budget.annualDepreciation)}</span>
                   </div>
                   <div className="flex justify-between">
-                    <span className="text-gray-600">% of Tuition (At Capacity):</span>
-                    <span className="font-medium text-green-600">
-                      {selectedSchool.metrics.pctOfTuitionCapacity.toFixed(1)}%
-                    </span>
+                    <span className="text-slate-300">Depr. / Seat:</span>
+                    <span className="font-medium">{formatCurrency(selectedSchool.budget.depreciationPerSeat)}</span>
                   </div>
                 </div>
               </div>
@@ -1830,48 +1738,21 @@ const FacilitiesCapexDashboard: React.FC = () => {
                 <h3 className="font-medium mb-3">Space Analysis</h3>
                 <div className="space-y-2 text-sm">
                   <div className="flex justify-between">
-                    <span className="text-gray-600">Total Sq Ft:</span>
-                    <span className="font-medium">
-                      {selectedSchool.sqft.toLocaleString()}
-                    </span>
+                    <span className="text-slate-300">Total Sq Ft:</span>
+                    <span className="font-medium">{selectedSchool.sqft.toLocaleString()}</span>
                   </div>
                   <div className="flex justify-between">
-                    <span className="text-gray-600">Sq Ft / Student:</span>
-                    <span className="font-medium">
-                      {selectedSchool.sqftPerStudent.toFixed(0)}
-                    </span>
+                    <span className="text-slate-300">Sq Ft / Student:</span>
+                    <span className="font-medium">{selectedSchool.sqftPerStudent.toFixed(0)}</span>
                   </div>
                   <div className="flex justify-between">
-                    <span className="text-gray-600">Lease / Sq Ft:</span>
-                    <span className="font-medium">
-                      ${selectedSchool.metrics.leasePerSqft.toFixed(2)}
-                    </span>
+                    <span className="text-slate-300">Lease / Sq Ft:</span>
+                    <span className="font-medium">${selectedSchool.metrics.leasePerSqft.toFixed(2)}</span>
                   </div>
                   <div className="flex justify-between">
-                    <span className="text-gray-600">Total / Sq Ft:</span>
-                    <span className="font-medium">
-                      ${selectedSchool.metrics.costPerSqft.toFixed(2)}
-                    </span>
+                    <span className="text-slate-300">Total / Sq Ft:</span>
+                    <span className="font-medium">${selectedSchool.metrics.costPerSqft.toFixed(2)}</span>
                   </div>
-                </div>
-              </div>
-
-              {/* Capacity Opportunity */}
-              <div className="bg-green-50 rounded p-4">
-                <div className="text-sm font-medium text-green-800">Capacity Improvement</div>
-                <div className="text-2xl font-bold text-green-600 mt-1">
-                  {selectedSchool.metrics.pctOfTuitionCurrent > 0
-                    ? (
-                        (1 -
-                          selectedSchool.metrics.pctOfTuitionCapacity /
-                            selectedSchool.metrics.pctOfTuitionCurrent) *
-                        100
-                      ).toFixed(0)
-                    : 0}
-                  %
-                </div>
-                <div className="text-xs text-green-700 mt-1">
-                  potential reduction in facilities % of tuition at full capacity
                 </div>
               </div>
             </div>

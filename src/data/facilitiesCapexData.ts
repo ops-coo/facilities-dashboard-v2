@@ -111,6 +111,8 @@ export const presetLabels: Record<ExpensePreset, string> = {
 // SCHOOL DATA TYPES
 // ============================================================================
 
+export type HealthScore = 'green' | 'yellow' | 'red' | 'gray';
+
 export interface SchoolData {
   id: string;
   name: string;
@@ -119,16 +121,31 @@ export interface SchoolData {
 
   schoolType: SchoolType;
   tuitionTier: TuitionTier;
+  targetPct: number; // Margin target: facilities as % of tuition (varies by tuition tier)
 
   currentEnrollment: number;
   capacity: number;
   utilizationRate: number;
   tuition: number;
+  isOperating: boolean;
 
   sqft: number;
   sqftPerStudent: number;
 
   costs: SixCategoryCosts;
+
+  revenue: {
+    current: number;
+    atCapacity: number;
+    revenueGap: number;
+  };
+
+  healthScore: HealthScore;
+  healthVerdict: string;
+
+  marginalCostPerStudent: number;
+  sunkCosts: number;
+  controllableCosts: number;
 
   metrics: {
     costPerStudentCurrent: number;
@@ -138,20 +155,35 @@ export interface SchoolData {
     totalExclLeasePerStudent: number;
     costPerSqft: number;
     leasePerSqft: number;
+    fixedFacPerSqft: number;
+    variableFacPerSqft: number;
+    studentSvcPerSqft: number;
+    depreciationPerSqft: number;
+    netFacFeePerSqft: number;
   };
 
   breakeven: {
-    studentsFor15Pct: number;
+    studentsForTarget: number;
     studentsFor20Pct: number;
     pctAt75Capacity: number;
     pctAt100Capacity: number;
   };
 
   budget: {
-    modelCostPerStudent: number;
-    actualCostPerStudent: number;
-    delta: number;
-    deltaPct: number;
+    modelFacPerStudent: number;    // Col W: budget fac ex-capex per student
+    modelCapexPerStudent: number;  // Col X: budget capex per student
+    modelNetFacPerStudent: number; // Col Y: budget total per student (W+X)
+    actualNetFacPerStudent: number;
+    netFacDelta: number;
+    netFacDeltaPct: number;
+    capexBuildout: number;
+    capexBudget: number;
+    capexDelta: number;
+    capexDeltaPct: number;
+    capexPerSeat: number;
+    annualDepreciation: number;
+    depreciationPerSeat: number;
+    totalVariance: number;
   };
 }
 
@@ -159,15 +191,15 @@ export interface SchoolData {
 // SCHOOL TYPES & TUITION TIERS
 // ============================================================================
 
-export type SchoolType = 'alpha-school' | 'microschool' | 'gt-school' | 'low-dollar' | 'montessorium';
+export type SchoolType = 'alpha-school' | 'growth-alpha' | 'microschool' | 'alternative' | 'low-dollar';
 export type TuitionTier = 'premium' | 'standard' | 'value' | 'economy';
 
 export const schoolTypeLabels: Record<SchoolType, string> = {
   'alpha-school': 'Alpha School',
+  'growth-alpha': 'Growth Alpha',
   microschool: 'MicroSchool',
-  'gt-school': 'GT / eSports',
-  'low-dollar': 'Low Dollar School',
-  montessorium: 'Montessorium',
+  alternative: 'Alternative Models',
+  'low-dollar': 'Low Cost Models',
 };
 
 export const tuitionTierLabels: Record<TuitionTier, string> = {
@@ -175,6 +207,19 @@ export const tuitionTierLabels: Record<TuitionTier, string> = {
   standard: '$35K-$40K',
   value: '$20K-$25K',
   economy: '<$20K',
+};
+
+// ============================================================================
+// CAPEX BUDGET RATES — per capacity student per year of depreciation
+// Formula: rate × capacity × depr_period = approved CapEx budget
+// ============================================================================
+
+export const capexBudgetRatePerStudent: Record<SchoolType, number> = {
+  'alpha-school': 1000,
+  'growth-alpha': 750,
+  microschool: 500,
+  alternative: 500,   // TBD — placeholder
+  'low-dollar': 500,  // TBD — placeholder
 };
 
 export const tuitionTierRanges: Record<TuitionTier, { min: number; max: number }> = {
@@ -222,8 +267,10 @@ interface RawSchoolEntry {
   transportation: number;
   totalExcCapex: number;
   totalIncCapex: number;
-  // Budget comparison
-  modelTotalCostPerStudent: number;
+  // Budget — from "Summary - Based on Expense down" cols W-Y (Per Original Approved Financial Model)
+  modelFacPerStudent: number;      // Col W: Facilities cost p/s exc. CapEx
+  modelCapexPerStudent: number;    // Col X: CapEx cost p/s
+  modelTotalCostPerStudent: number; // Col Y: Total cost p/s (= W + X)
   delta: number;
 }
 
@@ -248,6 +295,8 @@ const rawSchoolData: Record<string, RawSchoolEntry> = {
     transportation: 183403,
     totalExcCapex: 3751935,
     totalIncCapex: 3888660,
+    modelFacPerStudent: 12054,
+    modelCapexPerStudent: 7431,
     modelTotalCostPerStudent: 19485,
     delta: 8337,
   },
@@ -255,7 +304,7 @@ const rawSchoolData: Record<string, RawSchoolEntry> = {
     displayName: 'Alpha New York',
     currentEnrollment: 33,
     capacity: 123,
-    schoolType: 'microschool',
+    schoolType: 'growth-alpha',
     tuitionTier: 'premium',
     tuition: 65000,
     sqft: 15350,
@@ -271,6 +320,8 @@ const rawSchoolData: Record<string, RawSchoolEntry> = {
     transportation: 1202272,
     totalExcCapex: 3657784,
     totalIncCapex: 3752456,
+    modelFacPerStudent: 12920,
+    modelCapexPerStudent: 7697,
     modelTotalCostPerStudent: 20617,
     delta: 16818,
   },
@@ -294,6 +345,8 @@ const rawSchoolData: Record<string, RawSchoolEntry> = {
     transportation: 83196,
     totalExcCapex: 2893812,
     totalIncCapex: 2989132,
+    modelFacPerStudent: 11133,
+    modelCapexPerStudent: 4627,
     modelTotalCostPerStudent: 15760,
     delta: 2915,
   },
@@ -317,6 +370,8 @@ const rawSchoolData: Record<string, RawSchoolEntry> = {
     transportation: 19948,
     totalExcCapex: 2667841,
     totalIncCapex: 2772171,
+    modelFacPerStudent: 12191,
+    modelCapexPerStudent: 4921,
     modelTotalCostPerStudent: 17112,
     delta: 394,
   },
@@ -324,7 +379,7 @@ const rawSchoolData: Record<string, RawSchoolEntry> = {
     displayName: 'GT School',
     currentEnrollment: 21,
     capacity: 180,
-    schoolType: 'gt-school',
+    schoolType: 'alternative',
     tuitionTier: 'value',
     tuition: 25000,
     sqft: 12664,
@@ -340,6 +395,8 @@ const rawSchoolData: Record<string, RawSchoolEntry> = {
     transportation: 145640,
     totalExcCapex: 2013263,
     totalIncCapex: 2104907,
+    modelFacPerStudent: 5627,
+    modelCapexPerStudent: 5091,
     modelTotalCostPerStudent: 10718,
     delta: 5558,
   },
@@ -347,7 +404,7 @@ const rawSchoolData: Record<string, RawSchoolEntry> = {
     displayName: 'Alpha San Francisco',
     currentEnrollment: 19,
     capacity: 68,
-    schoolType: 'microschool',
+    schoolType: 'growth-alpha',
     tuitionTier: 'premium',
     tuition: 65000,
     sqft: 8099,
@@ -363,14 +420,16 @@ const rawSchoolData: Record<string, RawSchoolEntry> = {
     transportation: 49389,
     totalExcCapex: 1655408,
     totalIncCapex: 1852754,
-    modelTotalCostPerStudent: 13320,
+    modelFacPerStudent: 7515,
+    modelCapexPerStudent: 5804,
+    modelTotalCostPerStudent: 13319,
     delta: 16829,
   },
   esports_austin: {
     displayName: 'eSports Academy Austin',
     currentEnrollment: 15,
     capacity: 80,
-    schoolType: 'gt-school',
+    schoolType: 'alternative',
     tuitionTier: 'value',
     tuition: 25000,
     sqft: 5569,
@@ -386,6 +445,8 @@ const rawSchoolData: Record<string, RawSchoolEntry> = {
     transportation: 0,
     totalExcCapex: 1295321,
     totalIncCapex: 1325321,
+    modelFacPerStudent: 2700,
+    modelCapexPerStudent: 750,
     modelTotalCostPerStudent: 3450,
     delta: 13492,
   },
@@ -393,7 +454,7 @@ const rawSchoolData: Record<string, RawSchoolEntry> = {
     displayName: 'Alpha Piedmont',
     currentEnrollment: 0,
     capacity: 106,
-    schoolType: 'microschool',
+    schoolType: 'growth-alpha',
     tuitionTier: 'premium',
     tuition: 65000,
     sqft: 5000,
@@ -409,6 +470,8 @@ const rawSchoolData: Record<string, RawSchoolEntry> = {
     transportation: 0,
     totalExcCapex: 433598,
     totalIncCapex: 1316388,
+    modelFacPerStudent: 4606,
+    modelCapexPerStudent: 16720,
     modelTotalCostPerStudent: 21326,
     delta: -500,
   },
@@ -432,6 +495,8 @@ const rawSchoolData: Record<string, RawSchoolEntry> = {
     transportation: 0,
     totalExcCapex: 1130080,
     totalIncCapex: 1170080,
+    modelFacPerStudent: 1694,
+    modelCapexPerStudent: 1587,
     modelTotalCostPerStudent: 3281,
     delta: 2790,
   },
@@ -439,7 +504,7 @@ const rawSchoolData: Record<string, RawSchoolEntry> = {
     displayName: 'Alpha Santa Barbara',
     currentEnrollment: 13,
     capacity: 78,
-    schoolType: 'microschool',
+    schoolType: 'growth-alpha',
     tuitionTier: 'premium',
     tuition: 50000,
     sqft: 13820,
@@ -455,6 +520,8 @@ const rawSchoolData: Record<string, RawSchoolEntry> = {
     transportation: 0,
     totalExcCapex: 1049766,
     totalIncCapex: 1124766,
+    modelFacPerStudent: 3974,
+    modelCapexPerStudent: 9615,
     modelTotalCostPerStudent: 13590,
     delta: 9484,
   },
@@ -462,7 +529,7 @@ const rawSchoolData: Record<string, RawSchoolEntry> = {
     displayName: 'Alpha Palo Alto',
     currentEnrollment: 0,
     capacity: 47,
-    schoolType: 'microschool',
+    schoolType: 'growth-alpha',
     tuitionTier: 'premium',
     tuition: 65000,
     sqft: 3000,
@@ -478,6 +545,8 @@ const rawSchoolData: Record<string, RawSchoolEntry> = {
     transportation: 0,
     totalExcCapex: 370803,
     totalIncCapex: 1081288,
+    modelFacPerStudent: 8430,
+    modelCapexPerStudent: 30389,
     modelTotalCostPerStudent: 38818,
     delta: -500,
   },
@@ -501,6 +570,8 @@ const rawSchoolData: Record<string, RawSchoolEntry> = {
     transportation: 0,
     totalExcCapex: 397983,
     totalIncCapex: 646204,
+    modelFacPerStudent: 16360,
+    modelCapexPerStudent: 19858,
     modelTotalCostPerStudent: 36218,
     delta: -441,
   },
@@ -524,6 +595,8 @@ const rawSchoolData: Record<string, RawSchoolEntry> = {
     transportation: 11503,
     totalExcCapex: 548223,
     totalIncCapex: 558728,
+    modelFacPerStudent: 4400,
+    modelCapexPerStudent: 1910,
     modelTotalCostPerStudent: 6310,
     delta: 5568,
   },
@@ -547,6 +620,8 @@ const rawSchoolData: Record<string, RawSchoolEntry> = {
     transportation: 69449,
     totalExcCapex: 489999,
     totalIncCapex: 502499,
+    modelFacPerStudent: 4250,
+    modelCapexPerStudent: 1000,
     modelTotalCostPerStudent: 5250,
     delta: 15350,
   },
@@ -554,7 +629,7 @@ const rawSchoolData: Record<string, RawSchoolEntry> = {
     displayName: 'Alpha Scottsdale',
     currentEnrollment: 33,
     capacity: 38,
-    schoolType: 'microschool',
+    schoolType: 'growth-alpha',
     tuitionTier: 'standard',
     tuition: 40000,
     sqft: 20600,
@@ -570,6 +645,8 @@ const rawSchoolData: Record<string, RawSchoolEntry> = {
     transportation: 84218,
     totalExcCapex: 435002,
     totalIncCapex: 468581,
+    modelFacPerStudent: 4958,
+    modelCapexPerStudent: 1767,
     modelTotalCostPerStudent: 6725,
     delta: 6490,
   },
@@ -593,6 +670,8 @@ const rawSchoolData: Record<string, RawSchoolEntry> = {
     transportation: 0,
     totalExcCapex: 433696,
     totalIncCapex: 468503,
+    modelFacPerStudent: 11333,
+    modelCapexPerStudent: 2785,
     modelTotalCostPerStudent: 14118,
     delta: 6015,
   },
@@ -616,6 +695,8 @@ const rawSchoolData: Record<string, RawSchoolEntry> = {
     transportation: 32888,
     totalExcCapex: 374060,
     totalIncCapex: 442268,
+    modelFacPerStudent: 16243,
+    modelCapexPerStudent: 7579,
     modelTotalCostPerStudent: 23822,
     delta: 4538,
   },
@@ -639,6 +720,8 @@ const rawSchoolData: Record<string, RawSchoolEntry> = {
     transportation: 0,
     totalExcCapex: 343125,
     totalIncCapex: 427731,
+    modelFacPerStudent: 3370,
+    modelCapexPerStudent: 6768,
     modelTotalCostPerStudent: 10138,
     delta: 10355,
   },
@@ -646,7 +729,7 @@ const rawSchoolData: Record<string, RawSchoolEntry> = {
     displayName: 'Alpha Charlotte',
     currentEnrollment: 0,
     capacity: 40,
-    schoolType: 'microschool',
+    schoolType: 'growth-alpha',
     tuitionTier: 'standard',
     tuition: 40000,
     sqft: 17018,
@@ -662,6 +745,8 @@ const rawSchoolData: Record<string, RawSchoolEntry> = {
     transportation: 0,
     totalExcCapex: 380491,
     totalIncCapex: 392991,
+    modelFacPerStudent: 2656,
+    modelCapexPerStudent: 625,
     modelTotalCostPerStudent: 3281,
     delta: 6856,
   },
@@ -685,6 +770,8 @@ const rawSchoolData: Record<string, RawSchoolEntry> = {
     transportation: 0,
     totalExcCapex: 288686,
     totalIncCapex: 319596,
+    modelFacPerStudent: 3450,
+    modelCapexPerStudent: 2473,
     modelTotalCostPerStudent: 5923,
     delta: 8097,
   },
@@ -708,6 +795,8 @@ const rawSchoolData: Record<string, RawSchoolEntry> = {
     transportation: 0,
     totalExcCapex: 241951,
     totalIncCapex: 254451,
+    modelFacPerStudent: 4250,
+    modelCapexPerStudent: 1000,
     modelTotalCostPerStudent: 5250,
     delta: 5428,
   },
@@ -731,6 +820,8 @@ const rawSchoolData: Record<string, RawSchoolEntry> = {
     transportation: 0,
     totalExcCapex: 168087,
     totalIncCapex: 230833,
+    modelFacPerStudent: 4250,
+    modelCapexPerStudent: 5020,
     modelTotalCostPerStudent: 9270,
     delta: 2473,
   },
@@ -754,6 +845,8 @@ const rawSchoolData: Record<string, RawSchoolEntry> = {
     transportation: 38793,
     totalExcCapex: 183751,
     totalIncCapex: 196225,
+    modelFacPerStudent: 4079,
+    modelCapexPerStudent: 998,
     modelTotalCostPerStudent: 5077,
     delta: 3271,
   },
@@ -777,7 +870,9 @@ const rawSchoolData: Record<string, RawSchoolEntry> = {
     transportation: 0,
     totalExcCapex: 169911,
     totalIncCapex: 193089,
-    modelTotalCostPerStudent: 5243,
+    modelFacPerStudent: 2667,
+    modelCapexPerStudent: 2575,
+    modelTotalCostPerStudent: 5242,
     delta: 6772,
   },
   alpha_raleigh: {
@@ -800,6 +895,8 @@ const rawSchoolData: Record<string, RawSchoolEntry> = {
     transportation: 0,
     totalExcCapex: 142740,
     totalIncCapex: 155240,
+    modelFacPerStudent: 4250,
+    modelCapexPerStudent: 1000,
     modelTotalCostPerStudent: 5250,
     delta: 1460,
   },
@@ -807,7 +904,7 @@ const rawSchoolData: Record<string, RawSchoolEntry> = {
     displayName: 'Montessorium Brushy Creek',
     currentEnrollment: 18,
     capacity: 25,
-    schoolType: 'montessorium',
+    schoolType: 'alternative',
     tuitionTier: 'value',
     tuition: 25000,
     sqft: 14462,
@@ -823,6 +920,8 @@ const rawSchoolData: Record<string, RawSchoolEntry> = {
     transportation: 0,
     totalExcCapex: 91506,
     totalIncCapex: 104006,
+    modelFacPerStudent: 3250,
+    modelCapexPerStudent: 1000,
     modelTotalCostPerStudent: 4250,
     delta: 410,
   },
@@ -879,6 +978,181 @@ function transformToSixCategories(raw: RawSchoolEntry): SixCategoryCosts {
 }
 
 // ============================================================================
+// MARGIN TARGETS BY TUITION TIER
+// ============================================================================
+
+export function getTargetPct(tuition: number): number {
+  if (tuition >= 65000) return 20;
+  if (tuition > 40000) return 10;
+  return 5;
+}
+
+export function getTargetLabel(tuition: number): string {
+  if (tuition >= 65000) return '$65k+ → 20%';
+  if (tuition > 40000) return '$50k → 10%';
+  return '≤$40k → 5%';
+}
+
+// ============================================================================
+// PROGRAM + MISC FEES (from 2HL Approved Models)
+// Programs decline with scale for Alpha tiers ($40K+)
+// Misc declines with scale for all tiers except Low Dollar
+// ============================================================================
+
+export function getProgramsPerStudent(tuition: number, students: number): number {
+  if (tuition <= 15000) return 1250;
+  if (tuition <= 25000) return 2500;
+  // Alpha $40K+
+  if (students <= 50) return 12000;
+  if (students <= 100) return 12000 - 3500 * (students - 50) / 50;
+  return 8500;
+}
+
+export function getMiscPerStudent(tuition: number, students: number): number {
+  if (tuition <= 15000) return 1500; // flat for low dollar
+  if (students <= 50) return 3500;
+  if (students <= 100) return 3500 - 2000 * (students - 50) / 50;
+  return 1500;
+}
+
+export function getTimeback(tuition: number): number {
+  // 20% of tuition with $5K floor. $75K capped at $15K per model note.
+  return Math.min(15000, Math.max(5000, tuition * 0.20));
+}
+
+// ============================================================================
+// STAFFING MODELS (from 2HL Approved Models)
+// Different tiers have different staffing structures and ratios
+// ============================================================================
+
+export function getStaffingCost(tuition: number, students: number): number {
+  const loading = 1.15;
+
+  if (tuition <= 15000) {
+    // LOW DOLLAR: $75K guides, 13:1 small / 25:1 large, room assistants at scale
+    if (students < 100) {
+      // Small: 1 Lead Guide + regular guides at 13:1, no admin/HoS
+      const totalGuides = Math.max(2, Math.ceil(students / 13));
+      const leadGuides = 1;
+      const regularGuides = totalGuides - leadGuides;
+      return (leadGuides * 150000 + regularGuides * 75000) * loading;
+    } else {
+      // Large: 25:1 guides + 2 Room Assistants + HoS + Admin
+      const guides = Math.ceil(students / 25);
+      const guideCost = guides * 75000;
+      const otherHC = 2 * 40000 + 150000 + 60000; // 2 Room Asst + HoS + Admin
+      return (guideCost + otherHC) * loading;
+    }
+  }
+
+  if (tuition <= 25000) {
+    // ALTERNATIVE ($25K): $100K guides, 13:1 small / 25:1 large, room assistants at scale
+    if (students < 100) {
+      // Small: 1 Lead Guide + regular guides at 13:1, no admin/HoS
+      const totalGuides = Math.max(2, Math.ceil(students / 13));
+      const leadGuides = 1;
+      const regularGuides = totalGuides - leadGuides;
+      return (leadGuides * 150000 + regularGuides * 100000) * loading;
+    } else {
+      // Large: 2 Leads + guides at 25:1 + 2 Room Asst + HoS + Admin
+      const totalGuides = Math.ceil(students / 25);
+      const leadGuides = Math.min(2, totalGuides);
+      const regularGuides = Math.max(0, totalGuides - leadGuides);
+      const guideCost = leadGuides * 150000 + regularGuides * 100000;
+      const otherHC = 2 * 60000 + 200000 + 60000; // 2 Room Asst + HoS + Admin
+      return (guideCost + otherHC) * loading;
+    }
+  }
+
+  // ALPHA ($40K+): 11:1 ratio, lead guides, HoS at 100+
+  const isPremium = tuition >= 50000;
+  const hosBase = isPremium ? 300000 : 200000;
+  const leadBase = isPremium ? 200000 : 150000;
+  const guideBase = isPremium ? 120000 : 100000;
+  const adminBase = isPremium ? 75000 : 60000;
+
+  // Admin: always 1
+  let cost = adminBase * loading;
+
+  // Head of School: required at ≥100 students
+  if (students >= 100) cost += hosBase * loading;
+
+  // Guides: 11:1 ratio
+  const totalGuides = Math.ceil(students / 11);
+  // Lead guides: 1 per ~38 students, max 4
+  const leadGuides = Math.min(4, Math.max(1, Math.ceil(students / 38)));
+  const regularGuides = Math.max(0, totalGuides - leadGuides);
+
+  cost += leadGuides * leadBase * loading;
+  cost += regularGuides * guideBase * loading;
+
+  return cost;
+}
+
+// Full unit economics: Revenue - All Costs = Margin
+export interface UnitEconomicsResult {
+  students: number;
+  tuition: number;
+  revenue: number;
+  staffing: number;
+  staffingPerStudent: number;
+  facilities: number;
+  facilitiesPerStudent: number;
+  capexAnnual: number;
+  capexPerStudent: number;
+  programs: number;
+  programsPerStudent: number;
+  misc: number;
+  miscPerStudent: number;
+  timeback: number;
+  timebackPerStudent: number;
+  totalCosts: number;
+  totalPerStudent: number;
+  margin: number;
+  marginPerStudent: number;
+  marginPct: number;
+}
+
+export function calculateUnitEconomics(
+  tuition: number,
+  students: number,
+  facilitiesTotal: number,
+  capexAnnual: number,
+): UnitEconomicsResult {
+  const revenue = tuition * students;
+  const staffing = getStaffingCost(tuition, students);
+  const programs = getProgramsPerStudent(tuition, students) * students;
+  const misc = getMiscPerStudent(tuition, students) * students;
+  const timeback = getTimeback(tuition) * students;
+
+  const totalCosts = staffing + facilitiesTotal + capexAnnual + programs + misc + timeback;
+  const margin = revenue - totalCosts;
+
+  return {
+    students,
+    tuition,
+    revenue,
+    staffing,
+    staffingPerStudent: staffing / Math.max(students, 1),
+    facilities: facilitiesTotal,
+    facilitiesPerStudent: facilitiesTotal / Math.max(students, 1),
+    capexAnnual,
+    capexPerStudent: capexAnnual / Math.max(students, 1),
+    programs,
+    programsPerStudent: programs / Math.max(students, 1),
+    misc,
+    miscPerStudent: misc / Math.max(students, 1),
+    timeback,
+    timebackPerStudent: timeback / Math.max(students, 1),
+    totalCosts,
+    totalPerStudent: totalCosts / Math.max(students, 1),
+    margin,
+    marginPerStudent: margin / Math.max(students, 1),
+    marginPct: revenue > 0 ? (margin / revenue) * 100 : 0,
+  };
+}
+
+// ============================================================================
 // BUILD SCHOOL DATA
 // ============================================================================
 
@@ -887,13 +1161,20 @@ export function buildSchoolData(): SchoolData[] {
 
   for (const [id, raw] of Object.entries(rawSchoolData)) {
     const costs = transformToSixCategories(raw);
-    const enrollment = Math.max(raw.currentEnrollment, 1); // Avoid division by zero
+    const enrollment = Math.max(raw.currentEnrollment, 1);
     const utilizationRate = raw.currentEnrollment / raw.capacity;
+    const isOperating = raw.currentEnrollment > 0;
+
+    const revenueCurrent = raw.currentEnrollment * raw.tuition;
+    const revenueAtCapacity = raw.capacity * raw.tuition;
+    const revenueGap = revenueAtCapacity - revenueCurrent;
 
     const tuitionRevenueCurrent = enrollment * raw.tuition;
     const tuitionRevenueCapacity = raw.capacity * raw.tuition;
 
-    const studentsFor15Pct = Math.ceil(costs.grandTotal / (0.15 * raw.tuition));
+    const schoolTargetPct = getTargetPct(raw.tuition);
+    const targetFraction = schoolTargetPct / 100;
+    const studentsForTarget = Math.ceil(costs.grandTotal / (targetFraction * raw.tuition));
     const studentsFor20Pct = Math.ceil(costs.grandTotal / (0.20 * raw.tuition));
 
     const capacity75 = Math.floor(raw.capacity * 0.75);
@@ -906,10 +1187,69 @@ export function buildSchoolData(): SchoolData[] {
     const sqftPerStudent = raw.sqft / enrollment;
     const costPerSqft = raw.sqft > 0 ? costs.grandTotal / raw.sqft : 0;
     const leasePerSqft = raw.sqft > 0 ? costs.lease.total / raw.sqft : 0;
+    const fixedFacPerSqft = raw.sqft > 0 ? costs.fixedFacilities.total / raw.sqft : 0;
+    const variableFacPerSqft = raw.sqft > 0 ? costs.variableFacilities.total / raw.sqft : 0;
+    const studentSvcPerSqft = raw.sqft > 0 ? costs.studentServices.total / raw.sqft : 0;
+    const depreciationPerSqft = raw.sqft > 0 ? costs.annualDepreciation.total / raw.sqft : 0;
+    const netFacFeePerSqft = raw.sqft > 0 ? raw.totalExcCapex / raw.sqft : 0;
 
-    const actualCostPerStudent = costs.grandTotal / raw.capacity;
-    const deltaPct = raw.modelTotalCostPerStudent > 0
-      ? ((actualCostPerStudent - raw.modelTotalCostPerStudent) / raw.modelTotalCostPerStudent) * 100
+    const pctOfTuitionCurrent = (costs.grandTotal / tuitionRevenueCurrent) * 100;
+
+    // Sunk vs controllable
+    const sunkCosts = costs.lease.total + costs.annualDepreciation.total;
+    const controllableCosts = costs.fixedFacilities.total +
+      costs.variableFacilities.total + costs.studentServices.total;
+
+    // Marginal cost = variable-only costs per student (what the NEXT student costs)
+    const variableTotal = costs.variableFacilities.total + costs.studentServices.total;
+    const marginalCostPerStudent = isOperating
+      ? variableTotal / raw.currentEnrollment
+      : variableTotal > 0 ? variableTotal : 0;
+
+    // Health score — uses tier-specific targetPct, NOT hardcoded thresholds
+    // Red = can't reach target even at 100% capacity
+    // Green = well utilized AND within target
+    // Yellow = either under-utilized or over target
+    let healthScore: HealthScore;
+    let healthVerdict: string;
+    if (!isOperating) {
+      healthScore = 'gray';
+      healthVerdict = 'Pre-Opening';
+    } else if (pctAt100Capacity > schoolTargetPct * 1.5) {
+      // Even at full capacity, costs exceed 1.5× the tuition-tier target — structural problem
+      healthScore = 'red';
+      healthVerdict = 'Renegotiate';
+    } else if (utilizationRate >= 0.7 && pctOfTuitionCurrent <= schoolTargetPct) {
+      healthScore = 'green';
+      healthVerdict = 'Keeper';
+    } else if (utilizationRate >= 0.7) {
+      // Seats are filled but costs still above target
+      healthScore = 'yellow';
+      healthVerdict = 'Fix It';
+    } else {
+      // Under-utilized — fill seats first
+      healthScore = 'yellow';
+      healthVerdict = 'Fill It';
+    }
+
+    // Budget: from cols W-Y of "Summary - Based on Expense down"
+    // W = modelFacPerStudent (fac ex-capex), X = modelCapexPerStudent, Y = modelTotalCostPerStudent
+    const actualNetFacPerStudent = raw.totalExcCapex / raw.capacity;
+    const netFacDelta = actualNetFacPerStudent - raw.modelFacPerStudent;
+    const netFacDeltaPct = raw.modelFacPerStudent > 0
+      ? (netFacDelta / raw.modelFacPerStudent) * 100
+      : 0;
+    const totalVariance = netFacDelta * raw.capacity;
+
+    // CapEx budget = rate × capacity × depreciation period
+    // rate varies by school type: Alpha=$1000, Growth=$750, Micro=$500
+    const annualDeprAmount = costs.annualDepreciation.total;
+    const deprPeriod = annualDeprAmount > 0 ? raw.capexBuildout / annualDeprAmount : 10; // default 10yr
+    const capexRate = capexBudgetRatePerStudent[raw.schoolType];
+    const capexBudgetDerived = capexRate * raw.capacity * deprPeriod;
+    const capexDelta = raw.capexBuildout - capexBudgetDerived;
+    const capexDeltaPct = capexBudgetDerived > 0
+      ? (capexDelta / capexBudgetDerived) * 100
       : 0;
 
     schools.push({
@@ -919,35 +1259,58 @@ export function buildSchoolData(): SchoolData[] {
       companyId: id,
       schoolType: raw.schoolType,
       tuitionTier: raw.tuitionTier,
+      targetPct: schoolTargetPct,
       currentEnrollment: raw.currentEnrollment,
       capacity: raw.capacity,
       utilizationRate,
       tuition: raw.tuition,
+      isOperating,
       sqft: raw.sqft,
       sqftPerStudent,
       costs,
+      revenue: { current: revenueCurrent, atCapacity: revenueAtCapacity, revenueGap },
+      healthScore,
+      healthVerdict,
+      marginalCostPerStudent,
+      sunkCosts,
+      controllableCosts,
       metrics: {
         costPerStudentCurrent: costs.grandTotal / enrollment,
         costPerStudentCapacity: costs.grandTotal / raw.capacity,
-        pctOfTuitionCurrent: (costs.grandTotal / tuitionRevenueCurrent) * 100,
+        pctOfTuitionCurrent,
         pctOfTuitionCapacity: tuitionRevenueCapacity > 0
           ? (costs.grandTotal / tuitionRevenueCapacity) * 100
           : 0,
         totalExclLeasePerStudent: costs.totalExcludingLease / enrollment,
         costPerSqft,
         leasePerSqft,
+        fixedFacPerSqft,
+        variableFacPerSqft,
+        studentSvcPerSqft,
+        depreciationPerSqft,
+        netFacFeePerSqft,
       },
       breakeven: {
-        studentsFor15Pct,
+        studentsForTarget,
         studentsFor20Pct,
         pctAt75Capacity,
         pctAt100Capacity,
       },
       budget: {
-        modelCostPerStudent: raw.modelTotalCostPerStudent,
-        actualCostPerStudent,
-        delta: raw.delta,
-        deltaPct,
+        modelFacPerStudent: raw.modelFacPerStudent,
+        modelCapexPerStudent: raw.modelCapexPerStudent,
+        modelNetFacPerStudent: raw.modelTotalCostPerStudent,
+        actualNetFacPerStudent,
+        netFacDelta,
+        netFacDeltaPct,
+        capexBuildout: raw.capexBuildout,
+        capexBudget: capexBudgetDerived,
+        capexDelta,
+        capexDeltaPct,
+        capexPerSeat: raw.capexBuildout / raw.capacity,
+        annualDepreciation: costs.annualDepreciation.total,
+        depreciationPerSeat: costs.annualDepreciation.total / raw.capacity,
+        totalVariance,
       },
     });
   }
@@ -1066,10 +1429,10 @@ export interface SegmentSummary {
 export function aggregateBySchoolType(schools: SchoolData[]): SegmentSummary[] {
   const segments: Record<SchoolType, SchoolData[]> = {
     'alpha-school': [],
+    'growth-alpha': [],
     microschool: [],
-    'gt-school': [],
+    alternative: [],
     'low-dollar': [],
-    montessorium: [],
   };
 
   for (const school of schools) {
@@ -1165,6 +1528,37 @@ export interface PortfolioSummary {
   avgCostPerStudent: number;
   avgExclLeasePerStudent: number;
 
+  // Revenue context
+  totalRevenueCurrent: number;
+  totalRevenueAtCapacity: number;
+  totalRevenueGap: number;
+  facilitiesPctOfRevenue: number;
+
+  // Controllability
+  totalSunkCosts: number;
+  totalControllableCosts: number;
+  avgMarginalCost: number;
+
+  // Space / per-sqft averages
+  totalSqft: number;
+  totalNetFacFees: number;
+  avgLeasePerSqft: number;
+  avgFixedFacPerSqft: number;
+  avgVariableFacPerSqft: number;
+  avgStudentSvcPerSqft: number;
+  avgDepreciationPerSqft: number;
+  avgTotalCostPerSqft: number;
+  avgNetFacFeePerSqft: number;
+
+  // Health
+  schoolsByHealth: { green: number; yellow: number; red: number; preOpening: number };
+  totalBudgetVariance: number;
+
+  // CapEx budget
+  totalCapexBudget: number;
+  totalCapexDelta: number;
+  totalCapexDeltaPct: number;
+
   categoryBreakdown: {
     category: string;
     amount: number;
@@ -1214,6 +1608,52 @@ export function calculatePortfolioSummary(schools: SchoolData[]): PortfolioSumma
 
   const effectiveEnrollment = Math.max(totalEnrollment, 1);
 
+  // Space / per-sqft averages
+  const totalSqft = schools.reduce((sum, s) => sum + s.sqft, 0);
+  const totalNetFacFees = grandTotal - totalAnnualDepreciation;
+  const safeSqft = Math.max(totalSqft, 1);
+  const avgLeasePerSqft = totalLease / safeSqft;
+  const avgFixedFacPerSqft = totalFixedFacilities / safeSqft;
+  const avgVariableFacPerSqft = totalVariableFacilities / safeSqft;
+  const avgStudentSvcPerSqft = totalStudentServices / safeSqft;
+  const avgDepreciationPerSqft = totalAnnualDepreciation / safeSqft;
+  const avgTotalCostPerSqft = grandTotal / safeSqft;
+  const avgNetFacFeePerSqft = totalNetFacFees / safeSqft;
+
+  // Revenue context
+  const totalRevenueCurrent = schools.reduce((sum, s) => sum + s.revenue.current, 0);
+  const totalRevenueAtCapacity = schools.reduce((sum, s) => sum + s.revenue.atCapacity, 0);
+  const totalRevenueGap = totalRevenueAtCapacity - totalRevenueCurrent;
+  const facilitiesPctOfRevenue = totalRevenueCurrent > 0
+    ? (grandTotal / totalRevenueCurrent) * 100
+    : 0;
+
+  // Controllability
+  const totalSunkCosts = schools.reduce((sum, s) => sum + s.sunkCosts, 0);
+  const totalControllableCosts = schools.reduce((sum, s) => sum + s.controllableCosts, 0);
+  const operatingSchools = schools.filter(s => s.isOperating);
+  const avgMarginalCost = operatingSchools.length > 0
+    ? operatingSchools.reduce((sum, s) => sum + s.marginalCostPerStudent, 0) / operatingSchools.length
+    : 0;
+
+  // Health counts
+  const schoolsByHealth = {
+    green: schools.filter(s => s.healthScore === 'green').length,
+    yellow: schools.filter(s => s.healthScore === 'yellow').length,
+    red: schools.filter(s => s.healthScore === 'red').length,
+    preOpening: schools.filter(s => s.healthScore === 'gray').length,
+  };
+
+  // Budget variance
+  const totalBudgetVariance = schools.reduce((sum, s) => sum + s.budget.totalVariance, 0);
+
+  // CapEx budget
+  const totalCapexBudget = schools.reduce((sum, s) => sum + s.budget.capexBudget, 0);
+  const totalCapexDelta = totalCapexBuildout - totalCapexBudget;
+  const totalCapexDeltaPct = totalCapexBudget > 0
+    ? (totalCapexDelta / totalCapexBudget) * 100
+    : 0;
+
   return {
     totalSchools: schools.length,
     totalEnrollment,
@@ -1232,6 +1672,29 @@ export function calculatePortfolioSummary(schools: SchoolData[]): PortfolioSumma
 
     avgCostPerStudent: grandTotal / effectiveEnrollment,
     avgExclLeasePerStudent: totalExcludingLease / effectiveEnrollment,
+
+    totalSqft,
+    totalNetFacFees,
+    avgLeasePerSqft,
+    avgFixedFacPerSqft,
+    avgVariableFacPerSqft,
+    avgStudentSvcPerSqft,
+    avgDepreciationPerSqft,
+    avgTotalCostPerSqft,
+    avgNetFacFeePerSqft,
+
+    totalRevenueCurrent,
+    totalRevenueAtCapacity,
+    totalRevenueGap,
+    facilitiesPctOfRevenue,
+    totalSunkCosts,
+    totalControllableCosts,
+    avgMarginalCost,
+    schoolsByHealth,
+    totalBudgetVariance,
+    totalCapexBudget,
+    totalCapexDelta,
+    totalCapexDeltaPct,
 
     categoryBreakdown: [
       {
