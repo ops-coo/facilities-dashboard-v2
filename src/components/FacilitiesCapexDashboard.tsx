@@ -17,7 +17,6 @@ import React, { useState, useMemo } from 'react';
 import {
   PieChart, Pie, Cell, Tooltip, ResponsiveContainer,
   BarChart, Bar, XAxis, YAxis, CartesianGrid, ReferenceLine, Legend,
-  ScatterChart, Scatter, ZAxis,
 } from 'recharts';
 import {
   buildSchoolData,
@@ -275,8 +274,8 @@ const NewSchoolCalculator: React.FC<{ summary?: PortfolioSummary }> = ({ summary
           </div>
           <div className="bg-slate-800/60 border border-slate-600 rounded-lg p-3 text-center">
             <div className="text-xs text-slate-600 font-medium">Lease / Sq Ft</div>
-            <div className="text-lg font-bold text-slate-900">${leasePerSqft.toFixed(2)}</div>
-            <div className="text-[10px] text-slate-400">Portfolio avg: ${summary ? summary.avgLeasePerSqft.toFixed(2) : '—'}</div>
+            <div className="text-lg font-bold text-slate-900">${Math.round(leasePerSqft)}</div>
+            <div className="text-[10px] text-slate-400">Portfolio avg: ${summary ? Math.round(summary.avgLeasePerSqft) : '—'}</div>
           </div>
           <div className="bg-green-900/30 border border-green-700 rounded-lg p-3 text-center">
             <div className="text-xs text-green-400 font-medium">Break-Even</div>
@@ -494,10 +493,6 @@ const FacilitiesCapexDashboard: React.FC = () => {
       {activeTab === 'summary' && (
         <div className="space-y-6">
           {(() => {
-            const healthColorMap: Record<string, string> = {
-              green: '#22c55e', yellow: '#f59e0b', red: '#ef4444', gray: '#94a3b8',
-            };
-
             // Schools at target count
             const schoolsAtTarget = schools.filter(s => {
               const facTotal = s.costs.lease.total + s.costs.fixedFacilities.total +
@@ -541,23 +536,6 @@ const FacilitiesCapexDashboard: React.FC = () => {
               { name: 'Landscaping', value: schools.reduce((s, sc) => s + sc.costs.fixedFacilities.landscaping, 0), color: '#a78bfa' },
             ].sort((a, b) => b.value - a.value);
 
-            // Margin erosion scatter: model margin % vs actual margin %
-            const marginScatterData = schools.map(s => {
-              const facTotal = s.costs.lease.total + s.costs.fixedFacilities.total +
-                s.costs.variableFacilities.total + s.costs.studentServices.total;
-              const ue = calculateUnitEconomics(s.tuition, s.capacity, facTotal, s.costs.annualDepreciation.total);
-              const modelFacTotal = s.budget.modelFacPerStudent * s.capacity;
-              const modelCapexAnn = s.budget.capexBudget / 10;
-              const ueModel = calculateUnitEconomics(s.tuition, s.capacity, modelFacTotal, modelCapexAnn);
-              return {
-                name: s.displayName,
-                x: parseFloat(ueModel.marginPct.toFixed(1)),
-                y: parseFloat(ue.marginPct.toFixed(1)),
-                z: Math.max(s.capacity, 20),
-                health: s.healthScore as string,
-              };
-            });
-
             // Top 3 cost lines for insights
             const top3 = subcategoryData.slice(0, 3);
             const top3Total = top3.reduce((s, d) => s + d.value, 0);
@@ -590,6 +568,24 @@ const FacilitiesCapexDashboard: React.FC = () => {
             ];
             const sunkTotal = summary.totalLease + summary.totalAnnualDepreciation;
             const sunkPct = summary.grandTotal > 0 ? (sunkTotal / summary.grandTotal * 100).toFixed(0) : '0';
+
+            // Cost/sqft with industry benchmarks (building ops only, excl food/transport for fair comp)
+            const costPerSqftData = [...schools]
+              .filter(s => s.sqft > 0)
+              .map(s => {
+                const sqft = Math.max(s.sqft, 1);
+                const leasePSF = s.costs.lease.total / sqft;
+                const buildOps = (s.costs.fixedFacilities.total + s.costs.variableFacilities.total + s.costs.annualDepreciation.total) / sqft;
+                const svcPSF = s.costs.studentServices.total / sqft;
+                return {
+                  name: s.displayName.length > 18 ? s.displayName.replace('Alpha ', 'A. ') : s.displayName,
+                  lease: Math.round(leasePSF),
+                  buildOps: Math.round(buildOps),
+                  studentSvc: Math.round(svcPSF),
+                  buildingOnly: Math.round(leasePSF + buildOps),
+                };
+              })
+              .sort((a, b) => b.buildingOnly - a.buildingOnly);
 
             // CapEx cash exposure — the REAL capex story
             const capexSortedSchools = [...schools].sort((a, b) => b.costs.capexBuildout - a.costs.capexBuildout);
@@ -705,58 +701,44 @@ const FacilitiesCapexDashboard: React.FC = () => {
                     </div>
                   </div>
 
-                  {/* Margin Erosion: Model vs Actual */}
+                  {/* Cost/Sq Ft vs Industry Benchmarks */}
                   <div className="table-card rounded-xl overflow-hidden">
                     <div className="px-5 py-3 bg-slate-800 text-white">
-                      <h3 className="font-semibold">Margin Erosion: Model Predicted vs Actual</h3>
-                      <p className="text-xs text-slate-300 mt-0.5">Points below the diagonal = facilities costs eroded the model&apos;s predicted margin. Dot size = capacity.</p>
+                      <h3 className="font-semibold">Cost/Sq Ft vs Industry Benchmarks</h3>
+                      <p className="text-xs text-slate-300 mt-0.5">Building costs only (lease + ops, excl. food/transport) for fair comparison. Dashed lines = industry benchmarks.</p>
                     </div>
-                    <div className="p-4">
-                      <ResponsiveContainer width="100%" height={340}>
-                        <ScatterChart margin={{ top: 15, right: 15, bottom: 15, left: 5 }}>
-                          <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
-                          <XAxis
-                            type="number" dataKey="x" name="Model Margin"
-                            tickFormatter={(v: number) => `${v}%`}
-                            stroke="#94a3b8" fontSize={11}
-                            label={{ value: 'Model Predicted Margin %', position: 'insideBottom', offset: -5, fill: '#64748b', fontSize: 10 }}
-                          />
-                          <YAxis
-                            type="number" dataKey="y" name="Actual Margin"
-                            tickFormatter={(v: number) => `${v}%`}
-                            stroke="#94a3b8" fontSize={11}
-                            label={{ value: 'Actual Margin %', angle: -90, position: 'insideLeft', fill: '#64748b', fontSize: 10 }}
-                          />
-                          <ZAxis type="number" dataKey="z" range={[40, 350]} />
-                          <ReferenceLine segment={[{ x: -60, y: -60 }, { x: 50, y: 50 }]} stroke="#475569" strokeDasharray="6 3" strokeWidth={1.5} />
-                          <ReferenceLine y={0} stroke="#ef4444" strokeDasharray="4 2" strokeWidth={1} />
+                    <div className="p-4" style={{ height: Math.max(380, costPerSqftData.length * 26 + 60) }}>
+                      <ResponsiveContainer width="100%" height="100%">
+                        <BarChart data={costPerSqftData} layout="vertical" margin={{ left: 140, right: 40, top: 5, bottom: 5 }}>
+                          <CartesianGrid strokeDasharray="3 3" stroke="#334155" horizontal={false} />
+                          <XAxis type="number" tickFormatter={(v: number) => `$${v}`} stroke="#94a3b8" fontSize={11} />
+                          <YAxis type="category" dataKey="name" width={130} tick={{ fill: '#cbd5e1', fontSize: 11 }} tickLine={false} />
                           <Tooltip
                             content={({ active, payload }: any) => {
                               if (!active || !payload?.length) return null;
                               const d = payload[0].payload;
-                              const erosion = d.y - d.x;
                               return (
                                 <div className="bg-slate-800 border border-slate-600 rounded-lg p-2.5 text-xs shadow-xl">
                                   <div className="font-bold text-white text-sm mb-1">{d.name}</div>
-                                  <div className="text-slate-300">Model Margin: <span className="font-medium text-blue-400">{d.x}%</span></div>
-                                  <div className="text-slate-300">Actual Margin: <span className={`font-medium ${d.y >= 0 ? 'text-green-400' : 'text-red-400'}`}>{d.y}%</span></div>
-                                  <div className={`text-xs mt-1 font-medium ${erosion < 0 ? 'text-red-400' : 'text-green-400'}`}>
-                                    {erosion < 0 ? '' : '+'}{erosion.toFixed(1)}pp from facilities overrun
-                                  </div>
+                                  <div className="text-blue-300">Lease: <span className="font-medium text-white">${d.lease}/sqft</span></div>
+                                  <div className="text-violet-300">Building Ops: <span className="font-medium text-white">${d.buildOps}/sqft</span></div>
+                                  <div className="text-slate-400 border-t border-slate-600 mt-1 pt-1">Building Total: <span className="font-bold text-white">${d.buildingOnly}/sqft</span></div>
+                                  {d.studentSvc > 0 && <div className="text-orange-300">+ Food/Transport: <span className="font-medium">${d.studentSvc}/sqft</span></div>}
                                 </div>
                               );
                             }}
                           />
-                          <Scatter name="Schools" data={marginScatterData}>
-                            {marginScatterData.map((entry, idx) => (
-                              <Cell key={idx} fill={healthColorMap[entry.health] || '#94a3b8'} fillOpacity={0.85} />
-                            ))}
-                          </Scatter>
-                        </ScatterChart>
+                          <Legend wrapperStyle={{ fontSize: 11, color: '#94a3b8' }} />
+                          <ReferenceLine x={50} stroke="#f59e0b" strokeDasharray="6 3" strokeWidth={1.5} label={{ value: 'Premium Private $50', fill: '#f59e0b', fontSize: 9, position: 'insideTopRight' }} />
+                          <ReferenceLine x={30} stroke="#22c55e" strokeDasharray="6 3" strokeWidth={1.5} label={{ value: 'Avg Private $30', fill: '#22c55e', fontSize: 9, position: 'insideTopRight' }} />
+                          <ReferenceLine x={18} stroke="#94a3b8" strokeDasharray="6 3" strokeWidth={1.5} label={{ value: 'Charter $18', fill: '#94a3b8', fontSize: 9, position: 'insideTopRight' }} />
+                          <Bar dataKey="lease" name="Lease / sqft" stackId="bldg" fill="#1e40af" barSize={14} />
+                          <Bar dataKey="buildOps" name="Building Ops / sqft" stackId="bldg" fill="#7c3aed" barSize={14} radius={[0, 3, 3, 0]} />
+                        </BarChart>
                       </ResponsiveContainer>
-                      <div className="text-center text-xs text-slate-500 mt-1">
-                        Gray diagonal = &ldquo;model was accurate.&rdquo; Every point below it = facilities costs destroyed margin.
-                      </div>
+                    </div>
+                    <div className="px-5 pb-3 text-[10px] text-slate-500">
+                      Benchmarks: NCES Private School Universe Survey, BOMA Experience Exchange Report. Building ops = security, IT, landscaping, janitorial, utilities, repairs, depreciation. Food/transport excluded for apples-to-apples comparison.
                     </div>
                   </div>
                 </div>
@@ -1653,7 +1635,7 @@ const FacilitiesCapexDashboard: React.FC = () => {
               bySqft ? Math.max(s.sqft, 1) : atCap ? Math.max(s.capacity, 1) : Math.max(s.currentEnrollment, 1);
             const basisLabel = bySqft ? 'per sq ft' : atCap ? 'per student (capacity)' : 'per student (current)';
             const basisColLabel = bySqft ? 'Sq Ft' : 'Students';
-            const fmt = (v: number) => bySqft ? `$${v.toFixed(2)}` : `$${Math.round(v).toLocaleString()}`;
+            const fmt = (v: number) => bySqft ? `$${Math.round(v)}` : `$${Math.round(v).toLocaleString()}`;
             const showPct = !bySqft;
             const pctFmt = (v: number, tuition: number) => tuition > 0 ? `${((v / tuition) * 100).toFixed(1)}%` : '—';
 
@@ -2192,11 +2174,11 @@ const FacilitiesCapexDashboard: React.FC = () => {
                   </div>
                   <div className="flex justify-between">
                     <span className="text-slate-300">Lease / Sq Ft:</span>
-                    <span className="font-medium">${selectedSchool.metrics.leasePerSqft.toFixed(2)}</span>
+                    <span className="font-medium">${Math.round(selectedSchool.metrics.leasePerSqft)}</span>
                   </div>
                   <div className="flex justify-between">
                     <span className="text-slate-300">Total / Sq Ft:</span>
-                    <span className="font-medium">${selectedSchool.metrics.costPerSqft.toFixed(2)}</span>
+                    <span className="font-medium">${Math.round(selectedSchool.metrics.costPerSqft)}</span>
                   </div>
                 </div>
               </div>
