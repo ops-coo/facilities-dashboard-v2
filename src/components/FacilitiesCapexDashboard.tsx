@@ -510,18 +510,46 @@ const FacilitiesCapexDashboard: React.FC = () => {
             const avgOverrunPS = portfolioOverrun / portfolioCap;
             const overrunPct = portfolioFacBudget > 0 ? (portfolioOverrun / portfolioFacBudget * 100).toFixed(0) : '0';
 
-            // Model vs Actual per student (horizontal bar chart)
-            const modelVsActualData = [...schools].map(s => {
-              const cap = Math.max(s.capacity, 1);
-              const actual = (s.costs.lease.total + s.costs.fixedFacilities.total +
-                s.costs.variableFacilities.total + s.costs.studentServices.total) / cap;
-              return {
-                name: s.displayName.length > 18 ? s.displayName.replace('Alpha ', 'A. ') : s.displayName,
-                model: Math.round(s.budget.modelFacPerStudent),
-                actual: Math.round(actual),
-                overrun: Math.round(actual - s.budget.modelFacPerStudent),
-              };
-            }).sort((a, b) => b.overrun - a.overrun);
+            // Model vs Actual per student — grouped by school type with type averages
+            const modelVsActualData: { name: string; model: number; actual: number; overrun: number; isHeader: boolean }[] = [];
+            const typeOrder: SchoolType[] = ['alpha-school', 'growth-alpha', 'microschool', 'alternative', 'low-dollar'];
+            typeOrder.forEach(type => {
+              const typeSchools = schools.filter(s => s.schoolType === type);
+              if (typeSchools.length === 0) return;
+              const totalCap = Math.max(typeSchools.reduce((s, sc) => s + sc.capacity, 0), 1);
+              const avgModel = typeSchools.reduce((s, sc) => s + sc.budget.modelFacPerStudent * sc.capacity, 0) / totalCap;
+              const avgActual = typeSchools.reduce((s, sc) =>
+                s + sc.costs.lease.total + sc.costs.fixedFacilities.total +
+                sc.costs.variableFacilities.total + sc.costs.studentServices.total, 0) / totalCap;
+              // Type header row
+              modelVsActualData.push({
+                name: `${schoolTypeLabels[type]} (${typeSchools.length})`,
+                model: Math.round(avgModel),
+                actual: Math.round(avgActual),
+                overrun: Math.round(avgActual - avgModel),
+                isHeader: true,
+              });
+              // Individual schools sorted by overrun within type
+              [...typeSchools].sort((a, b) => {
+                const capA = Math.max(a.capacity, 1);
+                const capB = Math.max(b.capacity, 1);
+                const ovA = (a.costs.lease.total + a.costs.fixedFacilities.total + a.costs.variableFacilities.total + a.costs.studentServices.total) / capA - a.budget.modelFacPerStudent;
+                const ovB = (b.costs.lease.total + b.costs.fixedFacilities.total + b.costs.variableFacilities.total + b.costs.studentServices.total) / capB - b.budget.modelFacPerStudent;
+                return ovB - ovA;
+              }).forEach(s => {
+                const cap = Math.max(s.capacity, 1);
+                const actual = (s.costs.lease.total + s.costs.fixedFacilities.total +
+                  s.costs.variableFacilities.total + s.costs.studentServices.total) / cap;
+                const dn = s.displayName.length > 16 ? s.displayName.replace('Alpha ', 'A. ') : s.displayName;
+                modelVsActualData.push({
+                  name: `  ${dn}`,
+                  model: Math.round(s.budget.modelFacPerStudent),
+                  actual: Math.round(actual),
+                  overrun: Math.round(actual - s.budget.modelFacPerStudent),
+                  isHeader: false,
+                });
+              });
+            });
 
             // Subcategory totals (ranked by size) — negotiation targets
             const subcategoryData = [
@@ -642,28 +670,63 @@ const FacilitiesCapexDashboard: React.FC = () => {
                   </div>
                 </div>
 
-                {/* ===== ROW 2: THE APPROVED MODEL VS REALITY ===== */}
+                {/* ===== ROW 2: THE APPROVED MODEL VS REALITY — GROUPED BY TYPE ===== */}
                 <div className="table-card rounded-xl overflow-hidden">
                   <div className="px-5 py-3 bg-slate-800 text-white">
                     <h3 className="font-semibold">The Approved Model vs Reality: Facilities $/Student</h3>
-                    <p className="text-xs text-slate-300 mt-0.5">Blue = what the approved model budgeted per student. Red/green = what it actually costs. Sorted by largest overrun.</p>
+                    <p className="text-xs text-slate-300 mt-0.5">Grouped by school type. Bold rows = weighted average for that type. Blue = approved model budget. Red/green = actual. Schools sorted by overrun within each type.</p>
                   </div>
-                  <div className="p-4" style={{ height: Math.max(420, modelVsActualData.length * 28 + 60) }}>
+                  <div className="p-4" style={{ height: Math.max(500, modelVsActualData.length * 24 + 60) }}>
                     <ResponsiveContainer width="100%" height="100%">
-                      <BarChart data={modelVsActualData} layout="vertical" margin={{ left: 140, right: 40, top: 5, bottom: 5 }}>
+                      <BarChart data={modelVsActualData} layout="vertical" margin={{ left: 170, right: 40, top: 5, bottom: 5 }}>
                         <CartesianGrid strokeDasharray="3 3" stroke="#334155" horizontal={false} />
                         <XAxis type="number" tickFormatter={(v: number) => `$${(v / 1000).toFixed(0)}K`} stroke="#94a3b8" fontSize={11} />
-                        <YAxis type="category" dataKey="name" width={130} tick={{ fill: '#cbd5e1', fontSize: 11 }} tickLine={false} />
+                        <YAxis
+                          type="category" dataKey="name" width={160} tickLine={false}
+                          tick={({ x, y, payload }: any) => {
+                            const isHdr = payload.value && !payload.value.startsWith('  ');
+                            return (
+                              <text x={x} y={y} dy={4} textAnchor="end"
+                                fill={isHdr ? '#f1f5f9' : '#94a3b8'}
+                                fontSize={isHdr ? 12 : 11}
+                                fontWeight={isHdr ? 700 : 400}
+                              >
+                                {payload.value}
+                              </text>
+                            );
+                          }}
+                        />
                         <Tooltip
-                          formatter={(v: number, name: string) => [`$${v.toLocaleString()}/student`, name]}
-                          contentStyle={{ backgroundColor: '#1e293b', border: '1px solid #475569', borderRadius: 8, fontSize: 12 }}
-                          labelStyle={{ color: '#e2e8f0', fontWeight: 600 }}
+                          content={({ active, payload, label }: any) => {
+                            if (!active || !payload?.length) return null;
+                            const d = payload[0]?.payload;
+                            if (!d) return null;
+                            return (
+                              <div className="bg-slate-800 border border-slate-600 rounded-lg p-2.5 text-xs shadow-xl">
+                                <div className={`font-bold text-sm mb-1 ${d.isHeader ? 'text-blue-300' : 'text-white'}`}>{(label || '').trim()}</div>
+                                <div className="text-slate-300">Model: <span className="font-medium text-blue-400">${d.model.toLocaleString()}</span></div>
+                                <div className="text-slate-300">Actual: <span className={`font-medium ${d.overrun > 0 ? 'text-red-400' : 'text-green-400'}`}>${d.actual.toLocaleString()}</span></div>
+                                <div className={`mt-1 font-medium ${d.overrun > 0 ? 'text-red-400' : 'text-green-400'}`}>
+                                  {d.overrun > 0 ? '+' : ''}${d.overrun.toLocaleString()}/student ({d.model > 0 ? `${d.overrun > 0 ? '+' : ''}${Math.round(d.overrun / d.model * 100)}%` : '—'})
+                                </div>
+                                {d.isHeader && <div className="text-[10px] text-slate-400 mt-0.5">Weighted average for type</div>}
+                              </div>
+                            );
+                          }}
                         />
                         <Legend wrapperStyle={{ fontSize: 12, color: '#94a3b8', paddingTop: 8 }} />
-                        <Bar dataKey="model" name="Approved Model $/Student" fill="#3b82f6" barSize={10} radius={[0, 3, 3, 0]} />
-                        <Bar dataKey="actual" name="Actual $/Student" barSize={10} radius={[0, 3, 3, 0]}>
+                        <Bar dataKey="model" name="Approved Model" barSize={9} radius={[0, 3, 3, 0]}>
                           {modelVsActualData.map((entry, idx) => (
-                            <Cell key={idx} fill={entry.overrun > 0 ? '#ef4444' : '#22c55e'} />
+                            <Cell key={idx} fill={entry.isHeader ? '#93c5fd' : '#3b82f6'} />
+                          ))}
+                        </Bar>
+                        <Bar dataKey="actual" name="Actual Cost" barSize={9} radius={[0, 3, 3, 0]}>
+                          {modelVsActualData.map((entry, idx) => (
+                            <Cell key={idx} fill={
+                              entry.isHeader
+                                ? (entry.overrun > 0 ? '#fca5a5' : '#86efac')
+                                : (entry.overrun > 0 ? '#ef4444' : '#22c55e')
+                            } />
                           ))}
                         </Bar>
                       </BarChart>
