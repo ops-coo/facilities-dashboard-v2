@@ -375,6 +375,7 @@ const FacilitiesCapexDashboard: React.FC = () => {
   const [expandedFacBva, setExpandedFacBva] = useState<SchoolType[]>([]);
   const [expandedCapexBva, setExpandedCapexBva] = useState<SchoolType[]>([]);
   const [expandedUE, setExpandedUE] = useState<SchoolType[]>([]);
+  const [expandedOverview, setExpandedOverview] = useState<SchoolType[]>([]);
 
   // Sort state for each table
   const [overviewSort, setOverviewSort] = useState<{key: string; dir: 'asc'|'desc'}>({key: 'total', dir: 'desc'});
@@ -2262,48 +2263,82 @@ const FacilitiesCapexDashboard: React.FC = () => {
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-gray-200">
-                      {sorted.map((school, idx) => {
-                        const div = getDivisor(school);
-                        const tuition = school.tuition;
-                        const leasePerUnit = school.costs.lease.total / div;
-                        const totalCapex = school.costs.capexBuildout;
-                        const annualDepr = school.costs.annualDepreciation.total;
-                        const deprPeriod = annualDepr > 0 ? totalCapex / annualDepr : 0;
-                        const capexPerUnit = annualDepr / div;
-                        const leaseCapex = leasePerUnit + capexPerUnit;
-                        const fixedFac = school.costs.fixedFacilities.total / div;
-                        const varFac = school.costs.variableFacilities.total / div;
-                        const svc = school.costs.studentServices.total / div;
-                        const facTotal = fixedFac + varFac + svc;
-                        const basisVal = bySqft ? school.sqft : atCap ? school.capacity : school.currentEnrollment;
-
+                      {(['alpha-school', 'growth-alpha', 'microschool', 'alternative', 'low-dollar'] as SchoolType[]).map(type => {
+                        const ts = sorted.filter(s => s.schoolType === type);
+                        if (ts.length === 0) return null;
+                        const isExp = expandedOverview.includes(type);
+                        // Type-level aggregates
+                        const tDiv = bySqft
+                          ? Math.max(ts.reduce((s, sc) => s + sc.sqft, 0), 1)
+                          : atCap ? Math.max(ts.reduce((s, sc) => s + sc.capacity, 0), 1) : Math.max(ts.reduce((s, sc) => s + sc.currentEnrollment, 0), 1);
+                        const tBasisVal = bySqft ? ts.reduce((s, sc) => s + sc.sqft, 0)
+                          : atCap ? ts.reduce((s, sc) => s + sc.capacity, 0) : ts.reduce((s, sc) => s + sc.currentEnrollment, 0);
+                        const tLease = ts.reduce((s, sc) => s + sc.costs.lease.total, 0) / tDiv;
+                        const tCapexTotal = ts.reduce((s, sc) => s + sc.costs.capexBuildout, 0);
+                        const tAnnDepr = ts.reduce((s, sc) => s + sc.costs.annualDepreciation.total, 0);
+                        const tDeprPeriod = tAnnDepr > 0 ? tCapexTotal / tAnnDepr : 0;
+                        const tCapexPU = tAnnDepr / tDiv;
+                        const tLeaseCapex = tLease + tCapexPU;
+                        const tFixed = ts.reduce((s, sc) => s + sc.costs.fixedFacilities.total, 0) / tDiv;
+                        const tVarF = ts.reduce((s, sc) => s + sc.costs.variableFacilities.total, 0) / tDiv;
+                        const tSvc = ts.reduce((s, sc) => s + sc.costs.studentServices.total, 0) / tDiv;
+                        const tFacTotal = tFixed + tVarF + tSvc;
+                        const tTuition = ts.length > 0 ? ts.reduce((s, sc) => s + sc.tuition * (atCap ? sc.capacity : Math.max(sc.currentEnrollment, 1)), 0) / ts.reduce((s, sc) => s + (atCap ? sc.capacity : Math.max(sc.currentEnrollment, 1)), 0) : 1;
                         return (
-                          <tr key={school.id} className={`hover:bg-slate-700/40 cursor-pointer `} onClick={() => setSelectedSchool(school)}>
-                            <td className={`px-2 py-2 sticky left-0 z-10 ${idx % 2 === 1 ? '' : ''}`} style={{boxShadow: '2px 0 4px -2px rgba(0,0,0,0.06)'}}>
-                              <div className="font-medium text-slate-100 text-sm">{school.displayName}</div>
-                              <div className="text-[11px] text-slate-400">
-                                {schoolTypeLabels[school.schoolType]} | ${tuition.toLocaleString()} |{' '}
-                                <span className={school.isOperating ? 'text-green-400' : 'text-slate-500'}>{school.isOperating ? 'Operating' : 'Pre-Opening'}</span>
-                </div>
-                            </td>
-                            <td className="px-2 py-2 text-center text-sm">{basisVal.toLocaleString()}</td>
-                            {/* Lease */}
-                            <DollarPctCell val={leasePerUnit} tuition={tuition} bg="bg-blue-50/30" />
-                            {/* CapEx group */}
-                            <td className="px-2 py-2 text-right text-red-400 border-l border-slate-200">{formatCurrency(totalCapex)}</td>
-                            <td className="px-2 py-2 text-center text-slate-600">{deprPeriod > 0 ? `${deprPeriod.toFixed(0)} yr` : '—'}</td>
-                            <td className="px-2 py-2 text-right text-slate-700">{formatCurrency(annualDepr)}</td>
-                            <DollarPctCell val={capexPerUnit} tuition={tuition} bg="bg-slate-50/40" bold />
-                            {/* Lease + Capex */}
-                            <DollarPctCell val={leaseCapex} tuition={tuition} bg="bg-indigo-50/30" bold />
-                            {/* Facilities group */}
-                            <DollarPctCell val={fixedFac} tuition={tuition} bg="bg-violet-50/20" />
-                            <DollarPctCell val={varFac} tuition={tuition} bg="bg-teal-50/20" />
-                            <DollarPctCell val={svc} tuition={tuition} bg="bg-orange-50/20" />
-                            <DollarPctCell val={facTotal} tuition={tuition} bg="bg-emerald-50/30" bold />
-                            {/* Grand Total = answer column */}
-                            <DollarPctCell val={leaseCapex + facTotal} tuition={tuition} bg="answer-glow" bold />
-                          </tr>
+                          <React.Fragment key={type}>
+                            <tr className="bg-slate-700/30 cursor-pointer hover:bg-slate-700/50" onClick={() => setExpandedOverview(prev => prev.includes(type) ? prev.filter(t => t !== type) : [...prev, type])}>
+                              <td className="px-2 py-2.5 sticky left-0 z-10" style={{boxShadow: '2px 0 4px -2px rgba(0,0,0,0.06)'}}>
+                                <div className="font-bold text-white text-sm"><span className="text-slate-400 mr-1.5 text-xs">{isExp ? '▼' : '▶'}</span>{schoolTypeLabels[type]} ({ts.length})</div>
+                              </td>
+                              <td className="px-2 py-2.5 text-center font-semibold">{tBasisVal.toLocaleString()}</td>
+                              <DollarPctCell val={tLease} tuition={tTuition} bg="bg-blue-50/30" bold />
+                              <td className="px-2 py-2.5 text-right text-red-400 font-semibold border-l border-slate-200">{formatCurrency(tCapexTotal)}</td>
+                              <td className="px-2 py-2.5 text-center text-slate-600">{tDeprPeriod > 0 ? `${tDeprPeriod.toFixed(0)} yr` : '—'}</td>
+                              <td className="px-2 py-2.5 text-right text-slate-700 font-semibold">{formatCurrency(tAnnDepr)}</td>
+                              <DollarPctCell val={tCapexPU} tuition={tTuition} bg="bg-slate-50/40" bold />
+                              <DollarPctCell val={tLeaseCapex} tuition={tTuition} bg="bg-indigo-50/30" bold />
+                              <DollarPctCell val={tFixed} tuition={tTuition} bg="bg-violet-50/20" bold />
+                              <DollarPctCell val={tVarF} tuition={tTuition} bg="bg-teal-50/20" bold />
+                              <DollarPctCell val={tSvc} tuition={tTuition} bg="bg-orange-50/20" bold />
+                              <DollarPctCell val={tFacTotal} tuition={tTuition} bg="bg-emerald-50/30" bold />
+                              <DollarPctCell val={tLeaseCapex + tFacTotal} tuition={tTuition} bg="answer-glow" bold />
+                            </tr>
+                            {isExp && ts.map(school => {
+                              const div = getDivisor(school);
+                              const tuition = school.tuition;
+                              const leasePerUnit = school.costs.lease.total / div;
+                              const totalCapex = school.costs.capexBuildout;
+                              const annualDepr = school.costs.annualDepreciation.total;
+                              const deprPeriod = annualDepr > 0 ? totalCapex / annualDepr : 0;
+                              const capexPerUnit = annualDepr / div;
+                              const leaseCapex = leasePerUnit + capexPerUnit;
+                              const fixedFac = school.costs.fixedFacilities.total / div;
+                              const varFac = school.costs.variableFacilities.total / div;
+                              const svc = school.costs.studentServices.total / div;
+                              const facTotal = fixedFac + varFac + svc;
+                              const basisVal = bySqft ? school.sqft : atCap ? school.capacity : school.currentEnrollment;
+                              return (
+                                <tr key={school.id} className="hover:bg-slate-700/40 cursor-pointer bg-slate-800/20" onClick={() => setSelectedSchool(school)}>
+                                  <td className="px-2 py-2 pl-8 sticky left-0 z-10" style={{boxShadow: '2px 0 4px -2px rgba(0,0,0,0.06)'}}>
+                                    <div className="font-medium text-slate-200 text-sm">{school.displayName}</div>
+                                    <div className="text-[11px] text-slate-500">${tuition.toLocaleString()} | <span className={school.isOperating ? 'text-green-400' : 'text-slate-500'}>{school.isOperating ? 'Operating' : 'Pre-Opening'}</span></div>
+                                  </td>
+                                  <td className="px-2 py-2 text-center text-sm">{basisVal.toLocaleString()}</td>
+                                  <DollarPctCell val={leasePerUnit} tuition={tuition} bg="bg-blue-50/30" />
+                                  <td className="px-2 py-2 text-right text-red-400 border-l border-slate-200">{formatCurrency(totalCapex)}</td>
+                                  <td className="px-2 py-2 text-center text-slate-600">{deprPeriod > 0 ? `${deprPeriod.toFixed(0)} yr` : '—'}</td>
+                                  <td className="px-2 py-2 text-right text-slate-700">{formatCurrency(annualDepr)}</td>
+                                  <DollarPctCell val={capexPerUnit} tuition={tuition} bg="bg-slate-50/40" bold />
+                                  <DollarPctCell val={leaseCapex} tuition={tuition} bg="bg-indigo-50/30" bold />
+                                  <DollarPctCell val={fixedFac} tuition={tuition} bg="bg-violet-50/20" />
+                                  <DollarPctCell val={varFac} tuition={tuition} bg="bg-teal-50/20" />
+                                  <DollarPctCell val={svc} tuition={tuition} bg="bg-orange-50/20" />
+                                  <DollarPctCell val={facTotal} tuition={tuition} bg="bg-emerald-50/30" bold />
+                                  <DollarPctCell val={leaseCapex + facTotal} tuition={tuition} bg="answer-glow" bold />
+                                </tr>
+                              );
+                            })}
+                          </React.Fragment>
                         );
                       })}
                       {/* Portfolio Total Row */}
