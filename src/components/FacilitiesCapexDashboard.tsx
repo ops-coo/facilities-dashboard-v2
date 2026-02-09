@@ -1480,11 +1480,11 @@ const FacilitiesCapexDashboard: React.FC = () => {
                   </div>
     </div>
 
-                {/* TABLE 2: CapEx Budget vs Actual */}
+                {/* TABLE 2: CapEx Model vs Actual */}
                 <div className="table-card rounded-xl overflow-hidden">
                   <div className="px-5 py-3 bg-slate-800 text-white">
-                    <h3 className="font-semibold">CapEx — Budget vs Actual</h3>
-                    <p className="text-xs text-slate-300 mt-0.5">Budget = rate × capacity × depr period. Budget Depr = annual. Absolute Var = actual − budget. Depr Var/Student = annualized variance per student.</p>
+                    <h3 className="font-semibold">CapEx — Model vs Actual</h3>
+                    <p className="text-xs text-slate-300 mt-0.5">Model = rate × capacity × depr period. Model Depr = annual. Absolute Var = actual − model. Depr Var/Student = annualized variance per student.</p>
       </div>
       <div className="overflow-x-auto">
         <table className="min-w-full text-sm">
@@ -1492,8 +1492,8 @@ const FacilitiesCapexDashboard: React.FC = () => {
             <tr>
                           <th className="px-2 py-2 text-left text-xs font-medium text-slate-400 sticky left-0 z-10" style={{boxShadow: '2px 0 4px -2px rgba(0,0,0,0.06)'}}>School</th>
                           <th className="px-2 py-2 text-center text-xs font-medium text-slate-400">Students</th>
-                          <th className="px-2 py-2 text-right text-xs font-medium text-slate-700 bg-slate-50">Budget</th>
-                          <th className="px-2 py-2 text-right text-xs font-medium text-slate-700 bg-slate-50">Budget Depr.</th>
+                          <th className="px-2 py-2 text-right text-xs font-medium text-slate-700 bg-slate-50">Model</th>
+                          <th className="px-2 py-2 text-right text-xs font-medium text-slate-700 bg-slate-50">Model Depr.</th>
                           <th className="px-2 py-2 text-right text-xs font-medium text-slate-700 bg-slate-50">Actual</th>
                           <th className="px-2 py-2 text-right text-xs font-medium text-slate-700 bg-slate-50">Actual Depr.</th>
                           <th className="px-2 py-2 text-right text-xs font-medium text-amber-700 bg-amber-50">Absolute Var.</th>
@@ -1584,14 +1584,14 @@ const FacilitiesCapexDashboard: React.FC = () => {
       </div>
                   {/* CapEx B/A per seat by type */}
                   <div className="px-5 pb-4 border-t border-slate-700/50 pt-3">
-                    <div className="text-[10px] text-slate-500 font-medium uppercase tracking-wide mb-2">CapEx Budget vs Actual — Per Seat by Type</div>
+                    <div className="text-[10px] text-slate-500 font-medium uppercase tracking-wide mb-2">CapEx Model vs Actual — Per Seat by Type</div>
                     <div className="overflow-x-auto">
                       <table className="w-full text-xs">
                         <thead>
                           <tr className="border-b border-slate-700/50">
                             <th className="py-1.5 text-left text-slate-400 font-medium">Type</th>
                             <th className="py-1.5 text-center text-slate-400 font-medium">Seats</th>
-                            <th className="py-1.5 text-right text-blue-400 font-medium">Budget/Seat</th>
+                            <th className="py-1.5 text-right text-blue-400 font-medium">Model/Seat</th>
                             <th className="py-1.5 text-right text-slate-400 font-medium">Actual/Seat</th>
                             <th className="py-1.5 text-right text-slate-400 font-medium">Variance</th>
                           </tr>
@@ -2688,10 +2688,10 @@ const FacilitiesCapexDashboard: React.FC = () => {
 
               {/* CapEx Budget vs Actual */}
               <div>
-                <h3 className="font-medium mb-3">CapEx — Budget vs Actual</h3>
+                <h3 className="font-medium mb-3">CapEx — Model vs Actual</h3>
                 <div className="space-y-2 text-sm">
                   <div className="flex justify-between">
-                    <span className="text-slate-300">Approved Budget:</span>
+                    <span className="text-slate-300">Approved Model:</span>
                     <span className="font-medium">{selectedSchool.budget.capexBudget > 0 ? formatCurrency(selectedSchool.budget.capexBudget) : <span className="text-slate-500">No model</span>}</span>
                   </div>
                   <div className="flex justify-between">
