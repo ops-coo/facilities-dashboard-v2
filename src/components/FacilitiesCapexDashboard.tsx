@@ -595,23 +595,24 @@ const FacilitiesCapexDashboard: React.FC = () => {
             const sunkTotal = summary.totalLease + summary.totalAnnualDepreciation;
             const sunkPct = summary.grandTotal > 0 ? (sunkTotal / summary.grandTotal * 100).toFixed(0) : '0';
 
-            // Cost/sqft with industry benchmarks (building ops only, excl food/transport for fair comp)
-            const costPerSqftData = [...schools]
-              .filter(s => s.sqft > 0)
-              .map(s => {
-                const sqft = Math.max(s.sqft, 1);
-                const leasePSF = s.costs.lease.total / sqft;
-                const buildOps = (s.costs.fixedFacilities.total + s.costs.variableFacilities.total + s.costs.annualDepreciation.total) / sqft;
-                const svcPSF = s.costs.studentServices.total / sqft;
-                return {
-                  name: s.displayName.length > 18 ? s.displayName.replace('Alpha ', 'A. ') : s.displayName,
-                  lease: Math.round(leasePSF),
-                  buildOps: Math.round(buildOps),
-                  studentSvc: Math.round(svcPSF),
-                  buildingOnly: Math.round(leasePSF + buildOps),
-                };
-              })
-              .sort((a, b) => b.buildingOnly - a.buildingOnly);
+            // Cost/sqft by type (for comps table)
+            const sqftByType = typeOrder.map(type => {
+              const ts = schools.filter(s => s.schoolType === type && s.sqft > 0);
+              if (ts.length === 0) return null;
+              const sqft = Math.max(ts.reduce((s, sc) => s + sc.sqft, 0), 1);
+              const lease = ts.reduce((s, sc) => s + sc.costs.lease.total, 0);
+              const ops = ts.reduce((s, sc) => s + sc.costs.fixedFacilities.total + sc.costs.variableFacilities.total + sc.costs.annualDepreciation.total, 0);
+              return {
+                label: schoolTypeLabels[type],
+                lease: Math.round(lease / sqft),
+                ops: Math.round(ops / sqft),
+                total: Math.round((lease + ops) / sqft),
+              };
+            }).filter((d): d is NonNullable<typeof d> => d !== null);
+            const portfolioSqft = Math.max(summary.totalSqft, 1);
+            const portfolioLeasePSF = Math.round(summary.totalLease / portfolioSqft);
+            const portfolioOpsPSF = Math.round((summary.totalFixedFacilities + summary.totalVariableFacilities + summary.totalAnnualDepreciation) / portfolioSqft);
+            const portfolioTotalPSF = portfolioLeasePSF + portfolioOpsPSF;
 
             // CapEx cash exposure — the REAL capex story
             const capexSortedSchools = [...schools].sort((a, b) => b.costs.capexBuildout - a.costs.capexBuildout);
@@ -811,44 +812,62 @@ const FacilitiesCapexDashboard: React.FC = () => {
                     </div>
                   </div>
 
-                  {/* Cost/Sq Ft vs Industry Benchmarks */}
+                  {/* Cost/Sq Ft — Comps Table */}
                   <div className="table-card rounded-xl overflow-hidden">
                     <div className="px-5 py-3 bg-slate-800 text-white">
-                      <h3 className="font-semibold">Cost/Sq Ft vs Industry Benchmarks</h3>
-                      <p className="text-xs text-slate-300 mt-0.5">Building costs only (lease + ops, excl. food/transport) for fair comparison. Dashed lines = industry benchmarks.</p>
+                      <h3 className="font-semibold">Cost/Sq Ft vs Industry Comps</h3>
+                      <p className="text-xs text-slate-300 mt-0.5">Building costs only (lease + ops, excl. food/transport). Alpha portfolio by type vs industry benchmarks.</p>
                     </div>
-                    <div className="p-4" style={{ height: Math.max(380, costPerSqftData.length * 26 + 60) }}>
-                      <ResponsiveContainer width="100%" height="100%">
-                        <BarChart data={costPerSqftData} layout="vertical" margin={{ left: 140, right: 40, top: 5, bottom: 5 }}>
-                          <CartesianGrid strokeDasharray="3 3" stroke="#334155" horizontal={false} />
-                          <XAxis type="number" tickFormatter={(v: number) => `$${v}`} stroke="#94a3b8" fontSize={11} />
-                          <YAxis type="category" dataKey="name" width={130} tick={{ fill: '#cbd5e1', fontSize: 11 }} tickLine={false} />
-                          <Tooltip
-                            content={({ active, payload }: any) => {
-                              if (!active || !payload?.length) return null;
-                              const d = payload[0].payload;
-                              return (
-                                <div className="bg-slate-800 border border-slate-600 rounded-lg p-2.5 text-xs shadow-xl">
-                                  <div className="font-bold text-white text-sm mb-1">{d.name}</div>
-                                  <div className="text-blue-300">Lease: <span className="font-medium text-white">${d.lease}/sqft</span></div>
-                                  <div className="text-violet-300">Building Ops: <span className="font-medium text-white">${d.buildOps}/sqft</span></div>
-                                  <div className="text-slate-400 border-t border-slate-600 mt-1 pt-1">Building Total: <span className="font-bold text-white">${d.buildingOnly}/sqft</span></div>
-                                  {d.studentSvc > 0 && <div className="text-orange-300">+ Food/Transport: <span className="font-medium">${d.studentSvc}/sqft</span></div>}
-                                </div>
-                              );
-                            }}
-                          />
-                          <Legend wrapperStyle={{ fontSize: 11, color: '#94a3b8' }} />
-                          <ReferenceLine x={50} stroke="#f59e0b" strokeDasharray="6 3" strokeWidth={1.5} label={{ value: 'Premium Private $50', fill: '#f59e0b', fontSize: 9, position: 'insideTopRight' }} />
-                          <ReferenceLine x={30} stroke="#22c55e" strokeDasharray="6 3" strokeWidth={1.5} label={{ value: 'Avg Private $30', fill: '#22c55e', fontSize: 9, position: 'insideTopRight' }} />
-                          <ReferenceLine x={18} stroke="#94a3b8" strokeDasharray="6 3" strokeWidth={1.5} label={{ value: 'Charter $18', fill: '#94a3b8', fontSize: 9, position: 'insideTopRight' }} />
-                          <Bar dataKey="lease" name="Lease / sqft" stackId="bldg" fill="#1e40af" barSize={14} />
-                          <Bar dataKey="buildOps" name="Building Ops / sqft" stackId="bldg" fill="#7c3aed" barSize={14} radius={[0, 3, 3, 0]} />
-                        </BarChart>
-                      </ResponsiveContainer>
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-sm">
+                        <thead>
+                          <tr className="border-b border-slate-700">
+                            <th className="px-3 py-2 text-left text-xs font-medium text-slate-400">$/Sq Ft</th>
+                            <th className="px-3 py-2 text-right text-xs font-bold text-white bg-blue-900/20">Portfolio</th>
+                            {sqftByType.map(t => (
+                              <th key={t.label} className="px-3 py-2 text-right text-xs font-medium text-slate-300">{t.label}</th>
+                            ))}
+                            <th className="px-3 py-2 text-right text-xs font-medium text-amber-400 border-l border-slate-600">Premium K-12</th>
+                            <th className="px-3 py-2 text-right text-xs font-medium text-green-400">Avg Private</th>
+                            <th className="px-3 py-2 text-right text-xs font-medium text-slate-400">Charter</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-700/50">
+                          <tr className="hover:bg-slate-800/50">
+                            <td className="px-3 py-2 text-xs text-slate-300 font-medium">Lease</td>
+                            <td className="px-3 py-2 text-right font-bold text-white bg-blue-900/10">${portfolioLeasePSF}</td>
+                            {sqftByType.map(t => (
+                              <td key={t.label} className="px-3 py-2 text-right text-slate-200">${t.lease}</td>
+                            ))}
+                            <td className="px-3 py-2 text-right text-amber-300 border-l border-slate-600">$25–40</td>
+                            <td className="px-3 py-2 text-right text-green-300">$18–25</td>
+                            <td className="px-3 py-2 text-right text-slate-400">$12–18</td>
+                          </tr>
+                          <tr className="hover:bg-slate-800/50">
+                            <td className="px-3 py-2 text-xs text-slate-300 font-medium">Building Ops</td>
+                            <td className="px-3 py-2 text-right font-bold text-white bg-blue-900/10">${portfolioOpsPSF}</td>
+                            {sqftByType.map(t => (
+                              <td key={t.label} className="px-3 py-2 text-right text-slate-200">${t.ops}</td>
+                            ))}
+                            <td className="px-3 py-2 text-right text-amber-300 border-l border-slate-600">$15–25</td>
+                            <td className="px-3 py-2 text-right text-green-300">$10–15</td>
+                            <td className="px-3 py-2 text-right text-slate-400">$6–10</td>
+                          </tr>
+                          <tr className="bg-slate-800/40 font-bold hover:bg-slate-800/60">
+                            <td className="px-3 py-2 text-xs text-white">Total Building</td>
+                            <td className={`px-3 py-2 text-right text-base bg-blue-900/10 ${portfolioTotalPSF > 50 ? 'text-red-400' : portfolioTotalPSF > 30 ? 'text-amber-400' : 'text-green-400'}`}>${portfolioTotalPSF}</td>
+                            {sqftByType.map(t => (
+                              <td key={t.label} className={`px-3 py-2 text-right ${t.total > 50 ? 'text-red-400' : t.total > 30 ? 'text-amber-400' : 'text-green-400'}`}>${t.total}</td>
+                            ))}
+                            <td className="px-3 py-2 text-right text-amber-300 border-l border-slate-600">$40–65</td>
+                            <td className="px-3 py-2 text-right text-green-300">$28–40</td>
+                            <td className="px-3 py-2 text-right text-slate-400">$18–28</td>
+                          </tr>
+                        </tbody>
+                      </table>
                     </div>
-                    <div className="px-5 pb-3 text-[10px] text-slate-500">
-                      Benchmarks: NCES Private School Universe Survey, BOMA Experience Exchange Report. Building ops = security, IT, landscaping, janitorial, utilities, repairs, depreciation. Food/transport excluded for apples-to-apples comparison.
+                    <div className="px-5 py-2 text-[10px] text-slate-500 border-t border-slate-700/50">
+                      Industry benchmarks: NCES Private School Universe Survey, BOMA Experience Exchange Report. Building ops = security, IT, landscaping, janitorial, utilities, repairs, depreciation. Food/transport excluded for apples-to-apples comparison.
                     </div>
                   </div>
                 </div>
