@@ -812,11 +812,39 @@ const FacilitiesCapexDashboard: React.FC = () => {
                     </div>
                   </div>
 
-                  {/* Cost/Sq Ft — Comps Table */}
+                  {/* Cost/Sq Ft — Chart + Comps Table */}
                   <div className="table-card rounded-xl overflow-hidden">
                     <div className="px-5 py-3 bg-slate-800 text-white">
-                      <h3 className="font-semibold">Cost/Sq Ft vs Industry Comps</h3>
-                      <p className="text-xs text-slate-300 mt-0.5">Building costs only (lease + ops, excl. food/transport). Alpha portfolio by type vs industry benchmarks.</p>
+                      <h3 className="font-semibold">Cost/Sq Ft by Category</h3>
+                      <p className="text-xs text-slate-300 mt-0.5">Building costs per sq ft by school type (excl. food/transport). Industry comps below.</p>
+                    </div>
+                    <div className="p-4 pb-2">
+                      <ResponsiveContainer width="100%" height={220}>
+                        <BarChart data={sqftByType} margin={{ top: 10, right: 10, bottom: 5, left: 5 }}>
+                          <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
+                          <XAxis
+                            dataKey="label"
+                            tick={{ fill: '#cbd5e1', fontSize: 10 }}
+                            stroke="#94a3b8"
+                            interval={0}
+                            angle={-15}
+                            textAnchor="end"
+                            height={40}
+                          />
+                          <YAxis tickFormatter={(v: number) => `$${v}`} stroke="#94a3b8" fontSize={11} />
+                          <Tooltip
+                            formatter={(v: number, name: string) => [`$${v}/sqft`, name]}
+                            contentStyle={{ backgroundColor: '#1e293b', border: '1px solid #475569', borderRadius: 8, fontSize: 12 }}
+                            labelStyle={{ color: '#e2e8f0', fontWeight: 600 }}
+                          />
+                          <Legend wrapperStyle={{ fontSize: 11, color: '#94a3b8' }} />
+                          <Bar dataKey="lease" name="Lease" stackId="sqft" fill="#1e40af" barSize={32} />
+                          <Bar dataKey="ops" name="Building Ops" stackId="sqft" fill="#7c3aed" barSize={32} radius={[4, 4, 0, 0]} />
+                        </BarChart>
+                      </ResponsiveContainer>
+                    </div>
+                    <div className="px-4 pb-3">
+                      <div className="text-[10px] text-slate-500 font-medium uppercase tracking-wide mb-2 px-1">Industry Comps</div>
                     </div>
                     <div className="overflow-x-auto">
                       <table className="w-full text-sm">
