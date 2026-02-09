@@ -26,7 +26,6 @@ import {
   schoolTypeLabels,
   tuitionTierLabels,
   type SchoolData,
-  type PortfolioSummary,
   type SchoolType,
   type TuitionTier,
   type HealthScore,
@@ -112,22 +111,27 @@ const OperatingToggle: React.FC<{
 // ControllabilitySplit removed — replaced with pie chart in overview
 
 // ============================================================================
-// MARGINAL ECONOMICS TABLE
-// ============================================================================
-// NEW SCHOOL ECONOMICS CALCULATOR
+// (Deal Evaluation Calculator removed)
 // ============================================================================
 
-const NewSchoolCalculator: React.FC<{ summary?: PortfolioSummary }> = ({ summary }) => {
-  const [dealName, setDealName] = React.useState('Boca Raton — 2200 NW 5th Ave');
-  const [leaseAmount, setLeaseAmount] = React.useState(180000);
-  const [tuition, setTuition] = React.useState(50000);
-  const [capacity, setCapacity] = React.useState(40);
-  const [sqft, setSqft] = React.useState(8000);
-  const [fixedFacilitiesPct, setFixedFacilitiesPct] = React.useState(25);
-  const [capexBuildout, setCapexBuildout] = React.useState(250000);
-  const [amortYears, setAmortYears] = React.useState(5);
-  const [leaseTerm, setLeaseTerm] = React.useState(5);
-  const [earlyWalkYears, setEarlyWalkYears] = React.useState(2);
+/* eslint-disable @typescript-eslint/no-unused-vars */
+// @ts-ignore
+const _deadCode = () => {
+  const summary = null as any;
+  const setDealName = (_: any) => {}; const setLeaseAmount = (_: any) => {}; const setTuition = (_: any) => {};
+  const setCapacity = (_: any) => {}; const setSqft = (_: any) => {}; const setFixedFacilitiesPct = (_: any) => {};
+  const setCapexBuildout = (_: any) => {}; const setAmortYears = (_: any) => {}; const setLeaseTerm = (_: any) => {};
+  const setEarlyWalkYears = (_: any) => {};
+  const dealName = '';
+  const leaseAmount = 0;
+  const tuition = 0;
+  const capacity = 0;
+  const sqft = 0;
+  const fixedFacilitiesPct = 0;
+  const capexBuildout = 0;
+  const amortYears = 0;
+  const leaseTerm = 0;
+  const earlyWalkYears = 0;
 
   const annualDepreciation = capexBuildout / amortYears;
   const fixedFacCost = leaseAmount * (fixedFacilitiesPct / 100);
@@ -376,6 +380,7 @@ const FacilitiesCapexDashboard: React.FC = () => {
   const [expandedCapexBva, setExpandedCapexBva] = useState<SchoolType[]>([]);
   const [expandedUE, setExpandedUE] = useState<SchoolType[]>([]);
   const [expandedOverview, setExpandedOverview] = useState<SchoolType[]>([]);
+  const [expandedBE, setExpandedBE] = useState<SchoolType[]>([]);
 
   // Sort state for each table
   const [overviewSort, setOverviewSort] = useState<{key: string; dir: 'asc'|'desc'}>({key: 'total', dir: 'desc'});
@@ -2058,77 +2063,87 @@ const FacilitiesCapexDashboard: React.FC = () => {
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-200">
-                        {[...schools].sort((a, b) => a.capacity - b.capacity).map((school) => {
-                          const facTotal = school.costs.lease.total + school.costs.fixedFacilities.total + school.costs.variableFacilities.total + school.costs.studentServices.total;
-                          const capexAnn = school.costs.annualDepreciation.total;
-                          const target = getTargetPct(school.tuition);
-
-                          // Binary search for breakeven and target students
-                          let beStudents = 0;
-                          let targetStudents = 0;
-                          for (let s = 1; s <= school.capacity * 2; s++) {
-                            const ue = calculateUnitEconomics(school.tuition, s, facTotal, capexAnn);
-                            if (beStudents === 0 && ue.margin >= 0) beStudents = s;
-                            if (targetStudents === 0 && ue.marginPct >= target) targetStudents = s;
-                            if (beStudents > 0 && targetStudents > 0) break;
-                          }
-
-                          const ueAtCap = calculateUnitEconomics(school.tuition, school.capacity, facTotal, capexAnn);
-                          const canBE = beStudents > 0 && beStudents <= school.capacity;
-                          const canTarget = targetStudents > 0 && targetStudents <= school.capacity;
-                          const gapToBE = beStudents > 0 ? beStudents - school.currentEnrollment : school.capacity;
-
-                return (
-                            <tr key={school.id} className="hover:bg-slate-700/40 cursor-pointer" onClick={() => setSelectedSchool(school)}>
-                              <td className="px-2 py-2">
-                                <div className="font-medium text-slate-100 text-sm">{school.displayName}</div>
-                                <div className="text-[11px] text-slate-400">{schoolTypeLabels[school.schoolType]} | ${school.tuition.toLocaleString()}</div>
-                    </td>
-                              <td className="px-2 py-2 text-center">{school.capacity}</td>
-                              <td className="px-2 py-2 text-center">{school.currentEnrollment}</td>
-                              <td className="px-2 py-2 text-center">
-                                {beStudents > 0 ? (
-                                  <div>
-                                    <span className={canBE ? 'text-green-400 font-medium' : 'text-red-400 font-medium'}>{beStudents}</span>
-                                    {gapToBE > 0 && <div className="text-[10px] text-slate-400">+{gapToBE} needed</div>}
-                                  </div>
-                                ) : <span className="text-red-500 text-xs">N/A</span>}
-                    </td>
-                              <td className="px-2 py-2 text-center">
-                                {targetStudents > 0 ? (
-                                  <div>
-                                    <span className={canTarget ? 'text-green-400 font-medium' : 'text-red-400 font-medium'}>{targetStudents}</span>
-                                    {!canTarget && <div className="text-[10px] text-red-500">Exceeds cap!</div>}
-                                  </div>
-                                ) : <span className="text-red-500 text-xs">N/A</span>}
-                    </td>
-                              <td className="px-2 py-2 text-center">
-                                <span className="px-2 py-0.5 rounded text-xs bg-blue-100 text-blue-800">{target}%</span>
-                              </td>
-                              <td className={`px-2 py-2 text-right font-medium ${ueAtCap.margin >= 0 ? 'text-green-400' : 'text-red-400'}`}>
-                                {formatCurrency(ueAtCap.margin)}
-                              </td>
-                              <td className={`px-2 py-2 text-right font-bold ${ueAtCap.marginPct >= target ? 'text-green-400' : ueAtCap.marginPct >= 0 ? 'text-amber-600' : 'text-red-400'}`}>
-                                {ueAtCap.marginPct >= 0 ? '+' : ''}{ueAtCap.marginPct.toFixed(1)}%
-                              </td>
-                              <td className="px-2 py-2 text-center">
-                                {ueAtCap.marginPct >= target ? (
-                                  <span className="px-2 py-0.5 rounded text-xs bg-green-100 text-green-800">At Target</span>
-                                ) : ueAtCap.marginPct >= 0 ? (
-                                  <span className="px-2 py-0.5 rounded text-xs bg-amber-100 text-amber-800">Below Target</span>
-                                ) : (
-                                  <span className="px-2 py-0.5 rounded text-xs bg-red-100 text-red-800">Loss at Cap</span>
-                      )}
-                    </td>
-                  </tr>
-                );
-              })}
+                        {(['alpha-school', 'growth-alpha', 'microschool', 'alternative', 'low-dollar'] as SchoolType[]).map(type => {
+                          const ts = schools.filter(s => s.schoolType === type);
+                          if (ts.length === 0) return null;
+                          const isExp = expandedBE.includes(type);
+                          const tCap = ts.reduce((s, sc) => s + sc.capacity, 0);
+                          const tEnroll = ts.reduce((s, sc) => s + sc.currentEnrollment, 0);
+                          // Type-level aggregates
+                          const tFacTotal = ts.reduce((s, sc) => s + sc.costs.lease.total + sc.costs.fixedFacilities.total + sc.costs.variableFacilities.total + sc.costs.studentServices.total, 0);
+                          const tCapexAnn = ts.reduce((s, sc) => s + sc.costs.annualDepreciation.total, 0);
+                          const tRevenue = ts.reduce((s, sc) => s + sc.tuition * sc.capacity, 0);
+                          const tUeAtCap = calculateUnitEconomics(tRevenue / Math.max(tCap, 1), tCap, tFacTotal, tCapexAnn);
+                          const tTarget = Math.round(ts.reduce((s, sc) => s + getTargetPct(sc.tuition) * sc.capacity, 0) / Math.max(tCap, 1));
+                          const tPassCount = ts.filter(sc => {
+                            const fac = sc.costs.lease.total + sc.costs.fixedFacilities.total + sc.costs.variableFacilities.total + sc.costs.studentServices.total;
+                            const ue = calculateUnitEconomics(sc.tuition, sc.capacity, fac, sc.costs.annualDepreciation.total);
+                            return ue.marginPct >= getTargetPct(sc.tuition);
+                          }).length;
+                          return (
+                            <React.Fragment key={type}>
+                              <tr className="bg-slate-700/30 cursor-pointer hover:bg-slate-700/50" onClick={() => setExpandedBE(prev => prev.includes(type) ? prev.filter(t => t !== type) : [...prev, type])}>
+                                <td className="px-2 py-2.5 sticky left-0 z-10" style={{boxShadow: '2px 0 4px -2px rgba(0,0,0,0.06)'}}>
+                                  <div className="font-bold text-white text-sm"><span className="text-slate-400 mr-1.5 text-xs">{isExp ? '▼' : '▶'}</span>{schoolTypeLabels[type]} ({ts.length})</div>
+                                </td>
+                                <td className="px-2 py-2.5 text-center font-semibold">{tCap}</td>
+                                <td className="px-2 py-2.5 text-center font-semibold">{tEnroll}</td>
+                                <td className="px-2 py-2.5 text-center text-slate-500">—</td>
+                                <td className="px-2 py-2.5 text-center text-slate-500">—</td>
+                                <td className="px-2 py-2.5 text-center"><span className="px-2 py-0.5 rounded text-xs bg-blue-100 text-blue-800">{tTarget}%</span></td>
+                                <td className={`px-2 py-2.5 text-right font-semibold ${tUeAtCap.margin >= 0 ? 'text-green-400' : 'text-red-400'}`}>{formatCurrency(tUeAtCap.margin)}</td>
+                                <td className={`px-2 py-2.5 text-right font-bold ${tUeAtCap.marginPct >= tTarget ? 'text-green-400' : tUeAtCap.marginPct >= 0 ? 'text-amber-600' : 'text-red-400'}`}>{tUeAtCap.marginPct >= 0 ? '+' : ''}{tUeAtCap.marginPct.toFixed(1)}%</td>
+                                <td className="px-2 py-2.5 text-center">
+                                  <span className={`font-bold ${tPassCount === ts.length ? 'text-green-400' : tPassCount > 0 ? 'text-amber-400' : 'text-red-400'}`}>{tPassCount}/{ts.length}</span>
+                                </td>
+                              </tr>
+                              {isExp && ts.map(school => {
+                                const facTotal = school.costs.lease.total + school.costs.fixedFacilities.total + school.costs.variableFacilities.total + school.costs.studentServices.total;
+                                const capexAnn = school.costs.annualDepreciation.total;
+                                const target = getTargetPct(school.tuition);
+                                let beStudents = 0; let targetStudents = 0;
+                                for (let s = 1; s <= school.capacity * 2; s++) {
+                                  const ue = calculateUnitEconomics(school.tuition, s, facTotal, capexAnn);
+                                  if (beStudents === 0 && ue.margin >= 0) beStudents = s;
+                                  if (targetStudents === 0 && ue.marginPct >= target) targetStudents = s;
+                                  if (beStudents > 0 && targetStudents > 0) break;
+                                }
+                                const ueAtCap = calculateUnitEconomics(school.tuition, school.capacity, facTotal, capexAnn);
+                                const canBE = beStudents > 0 && beStudents <= school.capacity;
+                                const canTarget = targetStudents > 0 && targetStudents <= school.capacity;
+                                const gapToBE = beStudents > 0 ? beStudents - school.currentEnrollment : school.capacity;
+                                return (
+                                  <tr key={school.id} className="hover:bg-slate-700/40 cursor-pointer bg-slate-800/20" onClick={() => setSelectedSchool(school)}>
+                                    <td className="px-2 py-2 pl-8">
+                                      <div className="font-medium text-slate-200 text-sm">{school.displayName}</div>
+                                      <div className="text-[11px] text-slate-500">${school.tuition.toLocaleString()}</div>
+                                    </td>
+                                    <td className="px-2 py-2 text-center">{school.capacity}</td>
+                                    <td className="px-2 py-2 text-center">{school.currentEnrollment}</td>
+                                    <td className="px-2 py-2 text-center">
+                                      {beStudents > 0 ? (<div><span className={canBE ? 'text-green-400 font-medium' : 'text-red-400 font-medium'}>{beStudents}</span>{gapToBE > 0 && <div className="text-[10px] text-slate-400">+{gapToBE} needed</div>}</div>) : <span className="text-red-500 text-xs">N/A</span>}
+                                    </td>
+                                    <td className="px-2 py-2 text-center">
+                                      {targetStudents > 0 ? (<div><span className={canTarget ? 'text-green-400 font-medium' : 'text-red-400 font-medium'}>{targetStudents}</span>{!canTarget && <div className="text-[10px] text-red-500">Exceeds cap!</div>}</div>) : <span className="text-red-500 text-xs">N/A</span>}
+                                    </td>
+                                    <td className="px-2 py-2 text-center"><span className="px-2 py-0.5 rounded text-xs bg-blue-100 text-blue-800">{target}%</span></td>
+                                    <td className={`px-2 py-2 text-right font-medium ${ueAtCap.margin >= 0 ? 'text-green-400' : 'text-red-400'}`}>{formatCurrency(ueAtCap.margin)}</td>
+                                    <td className={`px-2 py-2 text-right font-bold ${ueAtCap.marginPct >= target ? 'text-green-400' : ueAtCap.marginPct >= 0 ? 'text-amber-600' : 'text-red-400'}`}>{ueAtCap.marginPct >= 0 ? '+' : ''}{ueAtCap.marginPct.toFixed(1)}%</td>
+                                    <td className="px-2 py-2 text-center">
+                                      {ueAtCap.marginPct >= target ? <span className="px-2 py-0.5 rounded text-xs bg-green-100 text-green-800">At Target</span>
+                                        : ueAtCap.marginPct >= 0 ? <span className="px-2 py-0.5 rounded text-xs bg-amber-100 text-amber-800">Below Target</span>
+                                        : <span className="px-2 py-0.5 rounded text-xs bg-red-100 text-red-800">Loss at Cap</span>}
+                                    </td>
+                                  </tr>
+                                );
+                              })}
+                            </React.Fragment>
+                          );
+                        })}
             </tbody>
           </table>
         </div>
       </div>
-
-                <NewSchoolCalculator summary={summary} />
               </>
             );
           })()}
