@@ -368,7 +368,7 @@ const FacilitiesCapexDashboard: React.FC = () => {
   // (Scenario slider removed — was on old segmentation tab)
 
   // View mode
-  const [activeTab, setActiveTab] = useState<'summary' | 'overview' | 'segmentation' | 'breakeven'>('summary');
+  const [activeTab, setActiveTab] = useState<'overview' | 'segmentation' | 'breakeven' | 'summary'>('overview');
   const [overviewBasis, setOverviewBasis] = useState<'current' | 'capacity' | 'sqft'>('capacity');
   const [showCharts, setShowCharts] = useState(false);
   const [expandedType, setExpandedType] = useState<SchoolType | null>(null);
@@ -447,10 +447,10 @@ const FacilitiesCapexDashboard: React.FC = () => {
       <div className="bg-slate-700 px-6">
         <div className="max-w-7xl mx-auto flex gap-1">
           {([
-            { id: 'summary', label: 'Summary', icon: '\u26a1' },
             { id: 'overview', label: 'Executive View', icon: '\ud83d\udcca' },
             { id: 'segmentation', label: 'Budget vs Actuals', icon: '\ud83d\udccb' },
             { id: 'breakeven', label: 'Unit Economics', icon: '\ud83c\udfaf' },
+            { id: 'summary', label: 'Summary', icon: '\u26a1' },
           ] as const).map((tab) => (
               <button
               key={tab.id}
@@ -486,8 +486,6 @@ const FacilitiesCapexDashboard: React.FC = () => {
             const portfolioFacActual = summary.totalLease + summary.totalFixedFacilities +
               summary.totalVariableFacilities + summary.totalStudentServices;
             const portfolioOverrun = portfolioFacActual - portfolioFacBudget;
-            const portfolioCap = Math.max(summary.totalCapacity, 1);
-            const avgOverrunPS = portfolioOverrun / portfolioCap;
             const overrunPct = portfolioFacBudget > 0 ? (portfolioOverrun / portfolioFacBudget * 100).toFixed(0) : '0';
 
             // Model vs Actual — type-level summary only (click to drill in)
@@ -634,43 +632,7 @@ const FacilitiesCapexDashboard: React.FC = () => {
 
             return (
               <>
-                {/* ===== HERO KPIs: Facilities Cost Story ===== */}
-                <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
-                  <div className="bg-slate-800 rounded-xl p-4 border border-slate-700">
-                    <div className="text-[10px] text-blue-400 uppercase tracking-wide font-medium">Model Fac Budget</div>
-                    <div className="text-xl font-bold text-blue-400 mt-1">{formatCurrency(portfolioFacBudget)}</div>
-                    <div className="text-xs text-slate-500 mt-0.5">${Math.round(portfolioFacBudget / portfolioCap).toLocaleString()}/student</div>
-                  </div>
-                  <div className="bg-slate-800 rounded-xl p-4 border border-slate-700">
-                    <div className="text-[10px] text-slate-400 uppercase tracking-wide font-medium">Actual Fac Cost</div>
-                    <div className="text-xl font-bold text-white mt-1">{formatCurrency(portfolioFacActual)}</div>
-                    <div className="text-xs text-slate-500 mt-0.5">${Math.round(portfolioFacActual / portfolioCap).toLocaleString()}/student</div>
-                  </div>
-                  <div className="bg-red-900/30 rounded-xl p-4 border border-red-700">
-                    <div className="text-[10px] text-red-400 uppercase tracking-wide font-medium">Facilities Overrun</div>
-                    <div className="text-xl font-bold text-red-400 mt-1">{portfolioOverrun > 0 ? '+' : ''}{formatCurrency(portfolioOverrun)}</div>
-                    <div className="text-xs text-red-500 mt-0.5">{overrunPct}% over approved model</div>
-                  </div>
-                  <div className="bg-red-900/20 rounded-xl p-4 border border-red-800/50">
-                    <div className="text-[10px] text-red-300 uppercase tracking-wide font-medium">Overrun / Student</div>
-                    <div className="text-xl font-bold text-red-300 mt-1">{avgOverrunPS > 0 ? '+' : ''}${Math.round(Math.abs(avgOverrunPS)).toLocaleString()}</div>
-                    <div className="text-xs text-red-500 mt-0.5">per seat at capacity</div>
-                  </div>
-                  <div className="bg-slate-800 rounded-xl p-4 border border-slate-700">
-                    <div className="text-[10px] text-slate-400 uppercase tracking-wide font-medium">At Target Margin</div>
-                    <div className="text-xl font-bold text-white mt-1">
-                      {schoolsAtTarget}<span className="text-sm text-slate-400 font-normal">/{summary.totalSchools}</span>
-                    </div>
-                    <div className="text-xs text-slate-500 mt-0.5">even at full capacity</div>
-                  </div>
-                  <div className="bg-amber-900/20 rounded-xl p-4 border border-amber-800/50">
-                    <div className="text-[10px] text-amber-400 uppercase tracking-wide font-medium">CapEx Cash Deployed</div>
-                    <div className="text-xl font-bold text-amber-300 mt-1">{formatCurrency(summary.totalCapexBuildout)}</div>
-                    <div className="text-xs text-amber-600 mt-0.5">Top 5 = {topCapexPct}% of total</div>
-                  </div>
-                </div>
-
-                {/* ===== ROW 2: THE APPROVED MODEL VS REALITY — BY TYPE ===== */}
+                {/* ===== ROW 1: THE APPROVED MODEL VS REALITY — BY TYPE ===== */}
                 <div className="table-card rounded-xl overflow-hidden">
                   <div className="px-5 py-3 bg-slate-800 text-white">
                     <h3 className="font-semibold">The Approved Model vs Reality: Facilities $/Student</h3>
