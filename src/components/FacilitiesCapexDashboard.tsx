@@ -1073,6 +1073,41 @@ const FacilitiesCapexDashboard: React.FC = () => {
                       </div>
                     </div>
                   )}
+                  {/* CapEx per seat by type */}
+                  <div className="px-5 pb-4 border-t border-slate-700/50 pt-3">
+                    <div className="text-[10px] text-slate-500 font-medium uppercase tracking-wide mb-2">CapEx per Seat by School Type</div>
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-xs">
+                        <thead>
+                          <tr className="border-b border-slate-700/50">
+                            <th className="py-1.5 text-left text-slate-400 font-medium">Type</th>
+                            <th className="py-1.5 text-right text-slate-400 font-medium">Total Buildout</th>
+                            <th className="py-1.5 text-center text-slate-400 font-medium">Schools</th>
+                            <th className="py-1.5 text-center text-slate-400 font-medium">Seats</th>
+                            <th className="py-1.5 text-right text-slate-400 font-medium">$/Seat</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {capexTypeData.map(t => (
+                            <tr key={t.type} className="border-b border-slate-700/30">
+                              <td className="py-1.5 text-slate-200 font-medium">{schoolTypeLabels[t.type]}</td>
+                              <td className="py-1.5 text-right text-white">{formatCurrency(t.buildout)}</td>
+                              <td className="py-1.5 text-center text-slate-300">{t.count}</td>
+                              <td className="py-1.5 text-center text-slate-300">{t.totalCap}</td>
+                              <td className={`py-1.5 text-right font-bold ${t.perSeat > 10000 ? 'text-red-400' : t.perSeat > 5000 ? 'text-amber-400' : 'text-green-400'}`}>${t.perSeat.toLocaleString()}</td>
+                            </tr>
+                          ))}
+                          <tr className="border-t border-slate-600 font-bold">
+                            <td className="py-1.5 text-white">Portfolio</td>
+                            <td className="py-1.5 text-right text-white">{formatCurrency(summary.totalCapexBuildout)}</td>
+                            <td className="py-1.5 text-center text-slate-300">{summary.totalSchools}</td>
+                            <td className="py-1.5 text-center text-slate-300">{summary.totalCapacity}</td>
+                            <td className="py-1.5 text-right text-white">${Math.round(summary.totalCapexBuildout / Math.max(summary.totalCapacity, 1)).toLocaleString()}</td>
+                          </tr>
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
                 </div>
 
                 {/* ===== ROW 4: SEGMENT COMPARISON + CONTROLLABILITY ===== */}
@@ -1428,6 +1463,49 @@ const FacilitiesCapexDashboard: React.FC = () => {
           </tbody>
         </table>
       </div>
+                  {/* Facilities B/A per student by type */}
+                  <div className="px-5 pb-4 border-t border-slate-700/50 pt-3">
+                    <div className="text-[10px] text-slate-500 font-medium uppercase tracking-wide mb-2">Facilities Budget vs Actual — Per Student by Type</div>
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-xs">
+                        <thead>
+                          <tr className="border-b border-slate-700/50">
+                            <th className="py-1.5 text-left text-slate-400 font-medium">Type</th>
+                            <th className="py-1.5 text-center text-slate-400 font-medium">Seats</th>
+                            <th className="py-1.5 text-right text-blue-400 font-medium">Budget/Student</th>
+                            <th className="py-1.5 text-right text-slate-400 font-medium">Actual/Student</th>
+                            <th className="py-1.5 text-right text-slate-400 font-medium">Variance</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {(['alpha-school', 'growth-alpha', 'microschool', 'alternative', 'low-dollar'] as SchoolType[]).map(type => {
+                            const ts = schools.filter(s => s.schoolType === type);
+                            if (ts.length === 0) return null;
+                            const cap = Math.max(ts.reduce((s, sc) => s + sc.capacity, 0), 1);
+                            const bgt = ts.reduce((s, sc) => s + sc.budget.modelFacPerStudent * sc.capacity, 0) / cap;
+                            const act = ts.reduce((s, sc) => s + sc.costs.lease.total + sc.costs.fixedFacilities.total + sc.costs.variableFacilities.total + sc.costs.studentServices.total, 0) / cap;
+                            const v = act - bgt;
+                            return (
+                              <tr key={type} className="border-b border-slate-700/30">
+                                <td className="py-1.5 text-slate-200 font-medium">{schoolTypeLabels[type]} ({ts.length})</td>
+                                <td className="py-1.5 text-center text-slate-300">{cap}</td>
+                                <td className="py-1.5 text-right text-blue-300">${Math.round(bgt).toLocaleString()}</td>
+                                <td className="py-1.5 text-right text-white">${Math.round(act).toLocaleString()}</td>
+                                <td className={`py-1.5 text-right font-bold ${v > 0 ? 'text-red-400' : 'text-green-400'}`}>{v > 0 ? '+' : ''}${Math.round(v).toLocaleString()}</td>
+                              </tr>
+                            );
+                          })}
+                          <tr className="border-t border-slate-600 font-bold">
+                            <td className="py-1.5 text-white">Portfolio</td>
+                            <td className="py-1.5 text-center text-slate-300">{summary.totalCapacity}</td>
+                            <td className="py-1.5 text-right text-blue-300">${Math.round(pFacBudget / pCap).toLocaleString()}</td>
+                            <td className="py-1.5 text-right text-white">${Math.round(pFacActual / pCap).toLocaleString()}</td>
+                            <td className={`py-1.5 text-right font-bold ${pFacVar > 0 ? 'text-red-400' : 'text-green-400'}`}>{pFacVar > 0 ? '+' : ''}${Math.round(pFacVar / pCap).toLocaleString()}</td>
+                          </tr>
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
     </div>
 
                 {/* TABLE 2: CapEx Budget vs Actual */}
@@ -1532,6 +1610,51 @@ const FacilitiesCapexDashboard: React.FC = () => {
           </tbody>
         </table>
       </div>
+                  {/* CapEx B/A per seat by type */}
+                  <div className="px-5 pb-4 border-t border-slate-700/50 pt-3">
+                    <div className="text-[10px] text-slate-500 font-medium uppercase tracking-wide mb-2">CapEx Budget vs Actual — Per Seat by Type</div>
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-xs">
+                        <thead>
+                          <tr className="border-b border-slate-700/50">
+                            <th className="py-1.5 text-left text-slate-400 font-medium">Type</th>
+                            <th className="py-1.5 text-center text-slate-400 font-medium">Seats</th>
+                            <th className="py-1.5 text-right text-blue-400 font-medium">Budget/Seat</th>
+                            <th className="py-1.5 text-right text-slate-400 font-medium">Actual/Seat</th>
+                            <th className="py-1.5 text-right text-slate-400 font-medium">Variance</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {(['alpha-school', 'growth-alpha', 'microschool', 'alternative', 'low-dollar'] as SchoolType[]).map(type => {
+                            const ts = schools.filter(s => s.schoolType === type);
+                            if (ts.length === 0) return null;
+                            const cap = Math.max(ts.reduce((s, sc) => s + sc.capacity, 0), 1);
+                            const bgt = ts.reduce((s, sc) => s + sc.budget.capexBudget, 0);
+                            const act = ts.reduce((s, sc) => s + sc.costs.capexBuildout, 0);
+                            const v = act - bgt;
+                            return (
+                              <tr key={type} className="border-b border-slate-700/30">
+                                <td className="py-1.5 text-slate-200 font-medium">{schoolTypeLabels[type]} ({ts.length})</td>
+                                <td className="py-1.5 text-center text-slate-300">{cap}</td>
+                                <td className="py-1.5 text-right text-blue-300">${Math.round(bgt / cap).toLocaleString()}</td>
+                                <td className="py-1.5 text-right text-white">${Math.round(act / cap).toLocaleString()}</td>
+                                <td className={`py-1.5 text-right font-bold ${v > 0 ? 'text-red-400' : 'text-green-400'}`}>{v > 0 ? '+' : ''}${Math.round(v / cap).toLocaleString()}</td>
+                              </tr>
+                            );
+                          })}
+                          <tr className="border-t border-slate-600 font-bold">
+                            <td className="py-1.5 text-white">Portfolio</td>
+                            <td className="py-1.5 text-center text-slate-300">{summary.totalCapacity}</td>
+                            <td className="py-1.5 text-right text-blue-300">${Math.round(summary.totalCapexBudget / pCap).toLocaleString()}</td>
+                            <td className="py-1.5 text-right text-white">${Math.round(summary.totalCapexBuildout / pCap).toLocaleString()}</td>
+                            <td className={`py-1.5 text-right font-bold ${summary.totalCapexBuildout - summary.totalCapexBudget > 0 ? 'text-red-400' : 'text-green-400'}`}>
+                              {summary.totalCapexBuildout - summary.totalCapexBudget > 0 ? '+' : ''}${Math.round((summary.totalCapexBuildout - summary.totalCapexBudget) / pCap).toLocaleString()}
+                            </td>
+                          </tr>
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
     </div>
               </>
             );
