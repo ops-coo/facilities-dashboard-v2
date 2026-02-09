@@ -404,6 +404,7 @@ const FacilitiesCapexDashboard: React.FC = () => {
   const [expandedVarianceType, setExpandedVarianceType] = useState<SchoolType | null>(null);
   const [expandedMarginType, setExpandedMarginType] = useState<SchoolType | null>(null);
   const [expandedTier, setExpandedTier] = useState<TuitionTier | null>(null);
+  const [expandedCapexType, setExpandedCapexType] = useState<SchoolType | null>(null);
 
   // Sort state for each table
   const [overviewSort, setOverviewSort] = useState<{key: string; dir: 'asc'|'desc'}>({key: 'total', dir: 'desc'});
@@ -622,22 +623,39 @@ const FacilitiesCapexDashboard: React.FC = () => {
             const portfolioBuildingPSF = portfolioLeasePSF + portfolioOpsPSF;
             const portfolioTotalPSF = portfolioBuildingPSF + portfolioSvcPSF;
 
-            // CapEx cash exposure — the REAL capex story
-            const capexSortedSchools = [...schools].sort((a, b) => b.costs.capexBuildout - a.costs.capexBuildout);
-            const top5Capex = capexSortedSchools.slice(0, 5).reduce((s, sc) => s + sc.costs.capexBuildout, 0);
-            const topCapexPct = summary.totalCapexBuildout > 0 ? (top5Capex / summary.totalCapexBuildout * 100).toFixed(0) : '0';
-            const top5AvgPerSeat = (() => {
-              const t5 = capexSortedSchools.slice(0, 5);
-              const t5Cap = Math.max(t5.reduce((s, sc) => s + sc.capacity, 0), 1);
-              return Math.round(top5Capex / t5Cap);
+            // CapEx cash exposure — by school type with drill-down
+            const capexTypeData = typeOrder.map(type => {
+              const ts = schools.filter(s => s.schoolType === type);
+              if (ts.length === 0) return null;
+              const totalBuildout = ts.reduce((s, sc) => s + sc.costs.capexBuildout, 0);
+              const totalCap = Math.max(ts.reduce((s, sc) => s + sc.capacity, 0), 1);
+              return {
+                name: `${schoolTypeLabels[type]} (${ts.length})`,
+                type,
+                buildout: totalBuildout,
+                perSeat: Math.round(totalBuildout / totalCap),
+                count: ts.length,
+                totalCap,
+              };
+            }).filter((d): d is NonNullable<typeof d> => d !== null);
+
+            const expandedCapexSchools = expandedCapexType ? schools
+              .filter(s => s.schoolType === expandedCapexType)
+              .sort((a, b) => b.costs.capexBuildout - a.costs.capexBuildout)
+              .map(s => ({
+                name: s.displayName.length > 16 ? s.displayName.replace('Alpha ', 'A. ') : s.displayName,
+                buildout: s.costs.capexBuildout,
+                perSeat: Math.round(s.costs.capexBuildout / Math.max(s.capacity, 1)),
+                capacity: s.capacity,
+                school: s,
+              }))
+            : [];
+
+            const topCapexPct = (() => {
+              const sorted = [...schools].sort((a, b) => b.costs.capexBuildout - a.costs.capexBuildout);
+              const top5 = sorted.slice(0, 5).reduce((s, sc) => s + sc.costs.capexBuildout, 0);
+              return summary.totalCapexBuildout > 0 ? (top5 / summary.totalCapexBuildout * 100).toFixed(0) : '0';
             })();
-            const capexBarData = capexSortedSchools.map(s => ({
-              name: s.displayName.length > 18 ? s.displayName.replace('Alpha ', 'A. ') : s.displayName,
-              buildout: s.costs.capexBuildout,
-              perSeat: Math.round(s.costs.capexBuildout / Math.max(s.capacity, 1)),
-              capacity: s.capacity,
-              isOperating: s.isOperating,
-            }));
 
             return (
               <>
@@ -929,15 +947,15 @@ const FacilitiesCapexDashboard: React.FC = () => {
                   </div>
                 </div>
 
-                {/* ===== ROW 3.5: CAPEX CASH EXPOSURE ===== */}
+                {/* ===== ROW 3.5: CAPEX CASH EXPOSURE — BY CATEGORY ===== */}
                 <div className="table-card rounded-xl overflow-hidden">
                   <div className="px-5 py-3 bg-slate-800 text-white">
                     <div className="flex items-center justify-between">
                       <div>
-                        <h3 className="font-semibold">CapEx Cash Exposure: New Buildouts vs Established Schools</h3>
+                        <h3 className="font-semibold">CapEx Cash Exposure by School Type</h3>
                         <p className="text-xs text-slate-300 mt-0.5">
-                          One-time cash outlay per school. Established MicroSchools: ~$25K. New Growth/Alpha buildouts: $400K–$1.8M.
-                          Top 5 account for {topCapexPct}% of all CapEx at ${top5AvgPerSeat.toLocaleString()}/seat avg.
+                          Total one-time buildout by category. Top 5 schools = {topCapexPct}% of total.
+                          <span className="text-blue-400"> Click to see individual schools.</span>
                         </p>
                       </div>
                       <div className="text-right flex-shrink-0 ml-4">
@@ -946,16 +964,16 @@ const FacilitiesCapexDashboard: React.FC = () => {
                       </div>
                     </div>
                   </div>
-                  <div className="p-4" style={{ height: Math.max(400, capexBarData.length * 26 + 60) }}>
+                  <div className="p-4" style={{ height: capexTypeData.length * 50 + 60 }}>
                     <ResponsiveContainer width="100%" height="100%">
-                      <BarChart data={capexBarData} layout="vertical" margin={{ left: 140, right: 60, top: 5, bottom: 5 }}>
+                      <BarChart data={capexTypeData} layout="vertical" margin={{ left: 170, right: 60, top: 5, bottom: 5 }}>
                         <CartesianGrid strokeDasharray="3 3" stroke="#334155" horizontal={false} />
                         <XAxis
                           type="number"
                           tickFormatter={(v: number) => v >= 1000000 ? `$${(v / 1000000).toFixed(1)}M` : `$${(v / 1000).toFixed(0)}K`}
                           stroke="#94a3b8" fontSize={11}
                         />
-                        <YAxis type="category" dataKey="name" width={130} tick={{ fill: '#cbd5e1', fontSize: 11 }} tickLine={false} />
+                        <YAxis type="category" dataKey="name" width={160} tick={{ fill: '#e2e8f0', fontSize: 12, fontWeight: 600 }} tickLine={false} />
                         <Tooltip
                           content={({ active, payload }: any) => {
                             if (!active || !payload?.length) return null;
@@ -963,30 +981,71 @@ const FacilitiesCapexDashboard: React.FC = () => {
                             return (
                               <div className="bg-slate-800 border border-slate-600 rounded-lg p-2.5 text-xs shadow-xl">
                                 <div className="font-bold text-white text-sm mb-1">{d.name}</div>
-                                <div className="text-slate-300">CapEx Buildout: <span className="font-medium text-white">{formatCurrency(d.buildout)}</span></div>
+                                <div className="text-slate-300">Total Buildout: <span className="font-medium text-white">{formatCurrency(d.buildout)}</span></div>
                                 <div className="text-slate-300">Per Seat: <span className="font-medium text-white">${d.perSeat.toLocaleString()}</span></div>
-                                <div className="text-slate-300">Capacity: <span className="font-medium text-white">{d.capacity} seats</span></div>
-                                <div className="text-slate-400 mt-0.5">{d.isOperating ? 'Operating' : 'Pre-Opening'}</div>
+                                <div className="text-slate-300">{d.count} schools, {d.totalCap} seats</div>
+                                <div className="text-blue-400 mt-0.5 text-[10px]">Click to drill in</div>
                               </div>
                             );
                           }}
                         />
-                        <Bar dataKey="buildout" name="CapEx Buildout" barSize={14} radius={[0, 4, 4, 0]}>
-                          {capexBarData.map((entry, idx) => (
-                            <Cell
-                              key={idx}
-                              fill={entry.buildout > 500000 ? '#ef4444' : entry.buildout > 100000 ? '#f59e0b' : '#22c55e'}
-                            />
+                        <Bar dataKey="buildout" name="CapEx Buildout" barSize={14} radius={[0, 4, 4, 0]}
+                          onClick={(_d: any, idx: number) => { const e = capexTypeData[idx]; if (e) setExpandedCapexType(expandedCapexType === e.type ? null : e.type); }}
+                          style={{ cursor: 'pointer' }}
+                        >
+                          {capexTypeData.map((entry, idx) => (
+                            <Cell key={idx} fill={entry.buildout > 2000000 ? '#ef4444' : entry.buildout > 500000 ? '#f59e0b' : '#22c55e'} />
                           ))}
                         </Bar>
                       </BarChart>
                     </ResponsiveContainer>
                   </div>
-                  <div className="px-5 pb-4 flex gap-5 text-xs text-slate-400">
-                    <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded bg-red-500" /> &gt;$500K</span>
-                    <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded bg-amber-500" /> $100K–$500K</span>
-                    <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded bg-green-500" /> &lt;$100K</span>
-                  </div>
+                  {expandedCapexType && expandedCapexSchools.length > 0 && (
+                    <div className="border-t border-slate-700">
+                      <div className="px-5 py-3 bg-blue-900/20 border-b border-blue-800/30 flex items-center justify-between">
+                        <div>
+                          <h4 className="font-semibold text-blue-300 text-sm">{schoolTypeLabels[expandedCapexType]} — School Detail</h4>
+                          <p className="text-[11px] text-slate-400">Click a bar to open full school profile.</p>
+                        </div>
+                        <button onClick={() => setExpandedCapexType(null)} className="text-slate-400 hover:text-white text-lg leading-none px-2 py-1 rounded hover:bg-slate-700">x</button>
+                      </div>
+                      <div className="p-4" style={{ height: Math.max(180, expandedCapexSchools.length * 36 + 40) }}>
+                        <ResponsiveContainer width="100%" height="100%">
+                          <BarChart data={expandedCapexSchools} layout="vertical" margin={{ left: 170, right: 60, top: 5, bottom: 5 }}>
+                            <CartesianGrid strokeDasharray="3 3" stroke="#334155" horizontal={false} />
+                            <XAxis
+                              type="number"
+                              tickFormatter={(v: number) => v >= 1000000 ? `$${(v / 1000000).toFixed(1)}M` : `$${(v / 1000).toFixed(0)}K`}
+                              stroke="#94a3b8" fontSize={11}
+                            />
+                            <YAxis type="category" dataKey="name" width={160} tick={{ fill: '#cbd5e1', fontSize: 11 }} tickLine={false} />
+                            <Tooltip
+                              content={({ active, payload }: any) => {
+                                if (!active || !payload?.length) return null;
+                                const d = payload[0].payload;
+                                return (
+                                  <div className="bg-slate-800 border border-slate-600 rounded-lg p-2.5 text-xs shadow-xl">
+                                    <div className="font-bold text-white text-sm mb-1">{d.name}</div>
+                                    <div className="text-slate-300">Buildout: <span className="font-medium text-white">{formatCurrency(d.buildout)}</span></div>
+                                    <div className="text-slate-300">Per Seat: <span className="font-medium text-white">${d.perSeat.toLocaleString()}</span></div>
+                                    <div className="text-slate-300">Capacity: <span className="font-medium text-white">{d.capacity} seats</span></div>
+                                  </div>
+                                );
+                              }}
+                            />
+                            <Bar dataKey="buildout" name="CapEx Buildout" barSize={12} radius={[0, 4, 4, 0]}
+                              onClick={(_d: any, idx: number) => { const s = expandedCapexSchools[idx]?.school; if (s) setSelectedSchool(s); }}
+                              style={{ cursor: 'pointer' }}
+                            >
+                              {expandedCapexSchools.map((entry, idx) => (
+                                <Cell key={idx} fill={entry.buildout > 500000 ? '#ef4444' : entry.buildout > 100000 ? '#f59e0b' : '#22c55e'} />
+                              ))}
+                            </Bar>
+                          </BarChart>
+                        </ResponsiveContainer>
+                      </div>
+                    </div>
+                  )}
                 </div>
 
                 {/* ===== ROW 4: SEGMENT COMPARISON + CONTROLLABILITY ===== */}
@@ -1087,7 +1146,7 @@ const FacilitiesCapexDashboard: React.FC = () => {
                     </div>
                     <div className="flex items-start gap-2">
                       <span className="text-red-400 font-bold mt-0.5">2.</span>
-                      <span><strong className="text-white">CapEx cash exposure is concentrated in new buildouts.</strong> The top 5 schools account for {topCapexPct}% of the {formatCurrency(summary.totalCapexBuildout)} total, averaging ${top5AvgPerSeat.toLocaleString()}/seat. Established MicroSchools built out for ~$25K; new Growth/Alpha locations are running $400K–$1.8M — a fundamentally different cost profile that the original model didn&apos;t anticipate.</span>
+                      <span><strong className="text-white">CapEx cash exposure is concentrated in new buildouts.</strong> The top 5 schools account for {topCapexPct}% of the {formatCurrency(summary.totalCapexBuildout)} total. Established MicroSchools built out for ~$25K; new Growth/Alpha locations are running $400K–$1.8M — a fundamentally different cost profile that the original model didn&apos;t anticipate.</span>
                     </div>
                     <div className="flex items-start gap-2">
                       <span className="text-red-400 font-bold mt-0.5">3.</span>
