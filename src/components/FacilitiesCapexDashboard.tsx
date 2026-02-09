@@ -506,44 +506,64 @@ const FacilitiesCapexDashboard: React.FC = () => {
               return ue.marginPct >= getTargetPct(s.tuition);
             }).length;
 
-            const operatingSchools = schools.filter(s => s.isOperating);
+            // Portfolio facilities budget vs actual
+            const portfolioFacBudget = schools.reduce((s, sc) => s + sc.budget.modelFacPerStudent * sc.capacity, 0);
+            const portfolioFacActual = summary.totalLease + summary.totalFixedFacilities +
+              summary.totalVariableFacilities + summary.totalStudentServices;
+            const portfolioOverrun = portfolioFacActual - portfolioFacBudget;
+            const portfolioCap = Math.max(summary.totalCapacity, 1);
+            const avgOverrunPS = portfolioOverrun / portfolioCap;
+            const overrunPct = portfolioFacBudget > 0 ? (portfolioOverrun / portfolioFacBudget * 100).toFixed(0) : '0';
 
-            // Scatter 1: Utilization vs Facilities Cost % of Tuition (at capacity)
-            const scatterUtilData = operatingSchools.map(s => ({
-              name: s.displayName,
-              x: Math.round(s.utilizationRate * 100),
-              y: parseFloat(s.metrics.pctOfTuitionCapacity.toFixed(1)),
-              z: Math.max(s.capacity, 20),
-              health: s.healthScore as string,
-            }));
+            // Model vs Actual per student (horizontal bar chart)
+            const modelVsActualData = [...schools].map(s => {
+              const cap = Math.max(s.capacity, 1);
+              const actual = (s.costs.lease.total + s.costs.fixedFacilities.total +
+                s.costs.variableFacilities.total + s.costs.studentServices.total) / cap;
+              return {
+                name: s.displayName.length > 18 ? s.displayName.replace('Alpha ', 'A. ') : s.displayName,
+                model: Math.round(s.budget.modelFacPerStudent),
+                actual: Math.round(actual),
+                overrun: Math.round(actual - s.budget.modelFacPerStudent),
+              };
+            }).sort((a, b) => b.overrun - a.overrun);
 
-            // Scatter 2: Portfolio Triage Quadrant
-            const triageData = schools.map(s => {
+            // Subcategory totals (ranked by size) — negotiation targets
+            const subcategoryData = [
+              { name: 'Food Services', value: schools.reduce((s, sc) => s + sc.costs.studentServices.foodServices, 0), color: '#ea580c' },
+              { name: 'Lease / Rent', value: summary.totalLease, color: '#1e40af' },
+              { name: 'Security', value: schools.reduce((s, sc) => s + sc.costs.fixedFacilities.security, 0), color: '#7c3aed' },
+              { name: 'Transportation', value: schools.reduce((s, sc) => s + sc.costs.studentServices.transportation, 0), color: '#f97316' },
+              { name: 'Repairs / Maint.', value: schools.reduce((s, sc) => s + sc.costs.variableFacilities.repairs, 0), color: '#0d9488' },
+              { name: 'IT Maintenance', value: schools.reduce((s, sc) => s + sc.costs.fixedFacilities.itMaintenance, 0), color: '#8b5cf6' },
+              { name: 'Utilities', value: schools.reduce((s, sc) => s + sc.costs.variableFacilities.utilities, 0), color: '#06b6d4' },
+              { name: 'Janitorial', value: schools.reduce((s, sc) => s + sc.costs.variableFacilities.janitorial, 0), color: '#14b8a6' },
+              { name: 'Landscaping', value: schools.reduce((s, sc) => s + sc.costs.fixedFacilities.landscaping, 0), color: '#a78bfa' },
+            ].sort((a, b) => b.value - a.value);
+
+            // Margin erosion scatter: model margin % vs actual margin %
+            const marginScatterData = schools.map(s => {
               const facTotal = s.costs.lease.total + s.costs.fixedFacilities.total +
                 s.costs.variableFacilities.total + s.costs.studentServices.total;
               const ue = calculateUnitEconomics(s.tuition, s.capacity, facTotal, s.costs.annualDepreciation.total);
+              const modelFacTotal = s.budget.modelFacPerStudent * s.capacity;
+              const modelCapexAnn = s.budget.capexBudget / 10;
+              const ueModel = calculateUnitEconomics(s.tuition, s.capacity, modelFacTotal, modelCapexAnn);
               return {
                 name: s.displayName,
-                x: parseFloat(ue.marginPct.toFixed(1)),
-                y: s.isOperating ? Math.round(s.utilizationRate * 100) : 0,
+                x: parseFloat(ueModel.marginPct.toFixed(1)),
+                y: parseFloat(ue.marginPct.toFixed(1)),
                 z: Math.max(s.capacity, 20),
                 health: s.healthScore as string,
               };
             });
 
-            // Revenue gap bars (top 15)
-            const gapData = [...schools]
-              .filter(s => s.revenue.revenueGap > 0)
-              .sort((a, b) => b.revenue.revenueGap - a.revenue.revenueGap)
-              .slice(0, 15)
-              .map(s => ({
-                name: s.displayName.length > 18 ? s.displayName.replace('Alpha ', 'A. ') : s.displayName,
-                current: s.revenue.current,
-                gap: s.revenue.revenueGap,
-                cost: s.costs.grandTotal,
-              }));
+            // Top 3 cost lines for insights
+            const top3 = subcategoryData.slice(0, 3);
+            const top3Total = top3.reduce((s, d) => s + d.value, 0);
+            const top3Pct = portfolioFacActual > 0 ? (top3Total / portfolioFacActual * 100).toFixed(0) : '0';
 
-            // Segment performance (per student at capacity)
+            // Segment performance (per student at capacity) — keep
             const segTypes: SchoolType[] = ['alpha-school', 'growth-alpha', 'microschool', 'alternative', 'low-dollar'];
             const segmentData = segTypes.map(type => {
               const ts = schools.filter(s => s.schoolType === type);
@@ -573,197 +593,156 @@ const FacilitiesCapexDashboard: React.FC = () => {
 
             return (
               <>
-                {/* ===== HERO KPIs ===== */}
+                {/* ===== HERO KPIs: Facilities Cost Story ===== */}
                 <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
                   <div className="bg-slate-800 rounded-xl p-4 border border-slate-700">
-                    <div className="text-[10px] text-slate-400 uppercase tracking-wide font-medium">Annual Facilities</div>
-                    <div className="text-xl font-bold text-white mt-1">{formatCurrency(summary.grandTotal)}</div>
-                    <div className="text-xs text-slate-500 mt-0.5">{costVsRevenuePct}% of current revenue</div>
+                    <div className="text-[10px] text-blue-400 uppercase tracking-wide font-medium">Model Fac Budget</div>
+                    <div className="text-xl font-bold text-blue-400 mt-1">{formatCurrency(portfolioFacBudget)}</div>
+                    <div className="text-xs text-slate-500 mt-0.5">${Math.round(portfolioFacBudget / portfolioCap).toLocaleString()}/student</div>
                   </div>
                   <div className="bg-slate-800 rounded-xl p-4 border border-slate-700">
-                    <div className="text-[10px] text-slate-400 uppercase tracking-wide font-medium">Current Revenue</div>
-                    <div className="text-xl font-bold text-green-400 mt-1">{formatCurrency(summary.totalRevenueCurrent)}</div>
-                    <div className="text-xs text-slate-500 mt-0.5">{summary.totalEnrollment} students</div>
+                    <div className="text-[10px] text-slate-400 uppercase tracking-wide font-medium">Actual Fac Cost</div>
+                    <div className="text-xl font-bold text-white mt-1">{formatCurrency(portfolioFacActual)}</div>
+                    <div className="text-xs text-slate-500 mt-0.5">${Math.round(portfolioFacActual / portfolioCap).toLocaleString()}/student</div>
                   </div>
-                  <div className="bg-slate-800 rounded-xl p-4 border border-slate-700">
-                    <div className="text-[10px] text-slate-400 uppercase tracking-wide font-medium">Revenue at Capacity</div>
-                    <div className="text-xl font-bold text-blue-400 mt-1">{formatCurrency(summary.totalRevenueAtCapacity)}</div>
-                    <div className="text-xs text-slate-500 mt-0.5">{summary.totalCapacity} seats</div>
+                  <div className="bg-red-900/30 rounded-xl p-4 border border-red-700">
+                    <div className="text-[10px] text-red-400 uppercase tracking-wide font-medium">Facilities Overrun</div>
+                    <div className="text-xl font-bold text-red-400 mt-1">{portfolioOverrun > 0 ? '+' : ''}{formatCurrency(portfolioOverrun)}</div>
+                    <div className="text-xs text-red-500 mt-0.5">{overrunPct}% over approved model</div>
                   </div>
-                  <div className="bg-amber-900/30 rounded-xl p-4 border border-amber-700">
-                    <div className="text-[10px] text-amber-400 uppercase tracking-wide font-medium">Revenue in Empty Seats</div>
-                    <div className="text-xl font-bold text-amber-300 mt-1">{formatCurrency(summary.totalRevenueGap)}</div>
-                    <div className="text-xs text-amber-600 mt-0.5">{emptySeats} unfilled seats</div>
-                  </div>
-                  <div className="bg-slate-800 rounded-xl p-4 border border-slate-700">
-                    <div className="text-[10px] text-slate-400 uppercase tracking-wide font-medium">Utilization</div>
-                    <div className={`text-xl font-bold mt-1 ${summary.avgUtilization < 50 ? 'text-red-400' : 'text-amber-400'}`}>
-                      {summary.avgUtilization.toFixed(0)}%
-                    </div>
-                    <div className="text-xs text-slate-500 mt-0.5">{summary.totalSchools} schools</div>
+                  <div className="bg-red-900/20 rounded-xl p-4 border border-red-800/50">
+                    <div className="text-[10px] text-red-300 uppercase tracking-wide font-medium">Overrun / Student</div>
+                    <div className="text-xl font-bold text-red-300 mt-1">{avgOverrunPS > 0 ? '+' : ''}${Math.round(Math.abs(avgOverrunPS)).toLocaleString()}</div>
+                    <div className="text-xs text-red-500 mt-0.5">per seat at capacity</div>
                   </div>
                   <div className="bg-slate-800 rounded-xl p-4 border border-slate-700">
                     <div className="text-[10px] text-slate-400 uppercase tracking-wide font-medium">At Target Margin</div>
                     <div className="text-xl font-bold text-white mt-1">
                       {schoolsAtTarget}<span className="text-sm text-slate-400 font-normal">/{summary.totalSchools}</span>
                     </div>
-                    <div className="text-xs text-slate-500 mt-0.5">at full capacity</div>
+                    <div className="text-xs text-slate-500 mt-0.5">even at full capacity</div>
+                  </div>
+                  <div className="bg-green-900/20 rounded-xl p-4 border border-green-800/50">
+                    <div className="text-[10px] text-green-400 uppercase tracking-wide font-medium">CapEx Variance</div>
+                    <div className={`text-xl font-bold mt-1 ${summary.totalCapexDelta > 0 ? 'text-amber-400' : 'text-green-400'}`}>
+                      {summary.totalCapexDelta > 0 ? '+' : ''}{formatCurrency(summary.totalCapexDelta)}
+                    </div>
+                    <div className="text-xs text-green-600 mt-0.5">CapEx is not the problem</div>
                   </div>
                 </div>
 
-                {/* ===== ROW 2: SCATTER PLOTS ===== */}
+                {/* ===== ROW 2: THE APPROVED MODEL VS REALITY ===== */}
+                <div className="table-card rounded-xl overflow-hidden">
+                  <div className="px-5 py-3 bg-slate-800 text-white">
+                    <h3 className="font-semibold">The Approved Model vs Reality: Facilities $/Student</h3>
+                    <p className="text-xs text-slate-300 mt-0.5">Blue = what the approved model budgeted per student. Red/green = what it actually costs. Sorted by largest overrun.</p>
+                  </div>
+                  <div className="p-4" style={{ height: Math.max(420, modelVsActualData.length * 28 + 60) }}>
+                    <ResponsiveContainer width="100%" height="100%">
+                      <BarChart data={modelVsActualData} layout="vertical" margin={{ left: 140, right: 40, top: 5, bottom: 5 }}>
+                        <CartesianGrid strokeDasharray="3 3" stroke="#334155" horizontal={false} />
+                        <XAxis type="number" tickFormatter={(v: number) => `$${(v / 1000).toFixed(0)}K`} stroke="#94a3b8" fontSize={11} />
+                        <YAxis type="category" dataKey="name" width={130} tick={{ fill: '#cbd5e1', fontSize: 11 }} tickLine={false} />
+                        <Tooltip
+                          formatter={(v: number, name: string) => [`$${v.toLocaleString()}/student`, name]}
+                          contentStyle={{ backgroundColor: '#1e293b', border: '1px solid #475569', borderRadius: 8, fontSize: 12 }}
+                          labelStyle={{ color: '#e2e8f0', fontWeight: 600 }}
+                        />
+                        <Legend wrapperStyle={{ fontSize: 12, color: '#94a3b8', paddingTop: 8 }} />
+                        <Bar dataKey="model" name="Approved Model $/Student" fill="#3b82f6" barSize={10} radius={[0, 3, 3, 0]} />
+                        <Bar dataKey="actual" name="Actual $/Student" barSize={10} radius={[0, 3, 3, 0]}>
+                          {modelVsActualData.map((entry, idx) => (
+                            <Cell key={idx} fill={entry.overrun > 0 ? '#ef4444' : '#22c55e'} />
+                          ))}
+                        </Bar>
+                      </BarChart>
+                    </ResponsiveContainer>
+                  </div>
+                </div>
+
+                {/* ===== ROW 3: WHERE THE MONEY GOES + MARGIN EROSION ===== */}
                 <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
 
-                  {/* Scatter 1: Utilization vs Cost — The Core Insight */}
+                  {/* Where the Money Goes — Subcategory Breakdown */}
                   <div className="table-card rounded-xl overflow-hidden">
                     <div className="px-5 py-3 bg-slate-800 text-white">
-                      <h3 className="font-semibold">The Core Lever: Utilization Drives Everything</h3>
-                      <p className="text-xs text-slate-300 mt-0.5">Higher utilization → lower cost burden. Dot size = capacity. Operating schools only.</p>
+                      <h3 className="font-semibold">Where the Money Goes</h3>
+                      <p className="text-xs text-slate-300 mt-0.5">Portfolio-wide facilities spend by line item, ranked by size. Top 3 = {top3Pct}% of total. These are your negotiation targets.</p>
+                    </div>
+                    <div className="p-4" style={{ height: Math.max(300, subcategoryData.length * 34 + 40) }}>
+                      <ResponsiveContainer width="100%" height="100%">
+                        <BarChart data={subcategoryData} layout="vertical" margin={{ left: 120, right: 40, top: 5, bottom: 5 }}>
+                          <CartesianGrid strokeDasharray="3 3" stroke="#334155" horizontal={false} />
+                          <XAxis type="number" tickFormatter={(v: number) => formatCurrency(v)} stroke="#94a3b8" fontSize={11} />
+                          <YAxis type="category" dataKey="name" width={110} tick={{ fill: '#cbd5e1', fontSize: 11 }} tickLine={false} />
+                          <Tooltip
+                            formatter={(v: number) => [formatCurrency(v), 'Total Spend']}
+                            contentStyle={{ backgroundColor: '#1e293b', border: '1px solid #475569', borderRadius: 8, fontSize: 12 }}
+                            labelStyle={{ color: '#e2e8f0', fontWeight: 600 }}
+                          />
+                          <Bar dataKey="value" name="Total Spend" barSize={18} radius={[0, 4, 4, 0]}>
+                            {subcategoryData.map((entry, idx) => (
+                              <Cell key={idx} fill={entry.color} />
+                            ))}
+                          </Bar>
+                        </BarChart>
+                      </ResponsiveContainer>
+                    </div>
+                  </div>
+
+                  {/* Margin Erosion: Model vs Actual */}
+                  <div className="table-card rounded-xl overflow-hidden">
+                    <div className="px-5 py-3 bg-slate-800 text-white">
+                      <h3 className="font-semibold">Margin Erosion: Model Predicted vs Actual</h3>
+                      <p className="text-xs text-slate-300 mt-0.5">Points below the diagonal = facilities costs eroded the model&apos;s predicted margin. Dot size = capacity.</p>
                     </div>
                     <div className="p-4">
-                      <ResponsiveContainer width="100%" height={320}>
+                      <ResponsiveContainer width="100%" height={340}>
                         <ScatterChart margin={{ top: 15, right: 15, bottom: 15, left: 5 }}>
                           <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
                           <XAxis
-                            type="number" dataKey="x" name="Utilization"
-                            domain={[0, 110]}
+                            type="number" dataKey="x" name="Model Margin"
                             tickFormatter={(v: number) => `${v}%`}
                             stroke="#94a3b8" fontSize={11}
-                            label={{ value: 'Utilization %', position: 'insideBottom', offset: -5, fill: '#64748b', fontSize: 10 }}
+                            label={{ value: 'Model Predicted Margin %', position: 'insideBottom', offset: -5, fill: '#64748b', fontSize: 10 }}
                           />
                           <YAxis
-                            type="number" dataKey="y" name="Fac % of Tuition"
+                            type="number" dataKey="y" name="Actual Margin"
                             tickFormatter={(v: number) => `${v}%`}
                             stroke="#94a3b8" fontSize={11}
-                            label={{ value: 'Fac Cost % of Tuition (at Cap)', angle: -90, position: 'insideLeft', fill: '#64748b', fontSize: 10 }}
+                            label={{ value: 'Actual Margin %', angle: -90, position: 'insideLeft', fill: '#64748b', fontSize: 10 }}
                           />
                           <ZAxis type="number" dataKey="z" range={[40, 350]} />
+                          <ReferenceLine segment={[{ x: -60, y: -60 }, { x: 50, y: 50 }]} stroke="#475569" strokeDasharray="6 3" strokeWidth={1.5} />
+                          <ReferenceLine y={0} stroke="#ef4444" strokeDasharray="4 2" strokeWidth={1} />
                           <Tooltip
                             content={({ active, payload }: any) => {
                               if (!active || !payload?.length) return null;
                               const d = payload[0].payload;
+                              const erosion = d.y - d.x;
                               return (
                                 <div className="bg-slate-800 border border-slate-600 rounded-lg p-2.5 text-xs shadow-xl">
                                   <div className="font-bold text-white text-sm mb-1">{d.name}</div>
-                                  <div className="text-slate-300">Utilization: <span className="font-medium text-white">{d.x}%</span></div>
-                                  <div className="text-slate-300">Fac % of Tuition: <span className="font-medium text-white">{d.y}%</span></div>
-                                  <div className="text-slate-400 mt-0.5">Capacity: {d.z} seats</div>
+                                  <div className="text-slate-300">Model Margin: <span className="font-medium text-blue-400">{d.x}%</span></div>
+                                  <div className="text-slate-300">Actual Margin: <span className={`font-medium ${d.y >= 0 ? 'text-green-400' : 'text-red-400'}`}>{d.y}%</span></div>
+                                  <div className={`text-xs mt-1 font-medium ${erosion < 0 ? 'text-red-400' : 'text-green-400'}`}>
+                                    {erosion < 0 ? '' : '+'}{erosion.toFixed(1)}pp from facilities overrun
+                                  </div>
                                 </div>
                               );
                             }}
                           />
-                          <Scatter name="Schools" data={scatterUtilData}>
-                            {scatterUtilData.map((entry, idx) => (
+                          <Scatter name="Schools" data={marginScatterData}>
+                            {marginScatterData.map((entry, idx) => (
                               <Cell key={idx} fill={healthColorMap[entry.health] || '#94a3b8'} fillOpacity={0.85} />
                             ))}
                           </Scatter>
                         </ScatterChart>
                       </ResponsiveContainer>
-                      <div className="flex gap-4 text-xs text-slate-400 justify-center mt-1">
-                        <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-full bg-green-500" /> Keeper</span>
-                        <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-full bg-amber-500" /> Fill / Fix</span>
-                        <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-full bg-red-500" /> At Risk</span>
-                        <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-full bg-slate-400" /> Pre-Opening</span>
+                      <div className="text-center text-xs text-slate-500 mt-1">
+                        Gray diagonal = &ldquo;model was accurate.&rdquo; Every point below it = facilities costs destroyed margin.
                       </div>
                     </div>
-                  </div>
-
-                  {/* Scatter 2: Portfolio Triage Quadrant */}
-                  <div className="table-card rounded-xl overflow-hidden">
-                    <div className="px-5 py-3 bg-slate-800 text-white">
-                      <h3 className="font-semibold">Portfolio Triage: Where to Focus</h3>
-                      <p className="text-xs text-slate-300 mt-0.5">Margin at capacity (X) vs utilization (Y). Quadrants show action priority.</p>
-                    </div>
-                    <div className="p-4">
-                      <div className="relative">
-                        {/* Quadrant labels */}
-                        <div className="absolute top-2 right-4 text-[10px] text-green-400/70 font-bold uppercase tracking-wider z-10">Stars</div>
-                        <div className="absolute bottom-10 right-4 text-[10px] text-blue-400/70 font-bold uppercase tracking-wider z-10">Fill Seats</div>
-                        <div className="absolute top-2 left-16 text-[10px] text-amber-400/70 font-bold uppercase tracking-wider z-10">Cut Costs</div>
-                        <div className="absolute bottom-10 left-16 text-[10px] text-red-400/70 font-bold uppercase tracking-wider z-10">Review</div>
-                        <ResponsiveContainer width="100%" height={320}>
-                          <ScatterChart margin={{ top: 15, right: 15, bottom: 15, left: 5 }}>
-                            <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
-                            <XAxis
-                              type="number" dataKey="x" name="Margin at Capacity"
-                              tickFormatter={(v: number) => `${v}%`}
-                              stroke="#94a3b8" fontSize={11}
-                              label={{ value: 'Margin % at Capacity', position: 'insideBottom', offset: -5, fill: '#64748b', fontSize: 10 }}
-                            />
-                            <YAxis
-                              type="number" dataKey="y" name="Utilization"
-                              domain={[0, 110]}
-                              tickFormatter={(v: number) => `${v}%`}
-                              stroke="#94a3b8" fontSize={11}
-                              label={{ value: 'Current Utilization %', angle: -90, position: 'insideLeft', fill: '#64748b', fontSize: 10 }}
-                            />
-                            <ZAxis type="number" dataKey="z" range={[40, 350]} />
-                            <ReferenceLine x={0} stroke="#94a3b8" strokeDasharray="6 3" strokeWidth={1.5} />
-                            <ReferenceLine y={50} stroke="#94a3b8" strokeDasharray="6 3" strokeWidth={1.5} />
-                            <Tooltip
-                              content={({ active, payload }: any) => {
-                                if (!active || !payload?.length) return null;
-                                const d = payload[0].payload;
-                                return (
-                                  <div className="bg-slate-800 border border-slate-600 rounded-lg p-2.5 text-xs shadow-xl">
-                                    <div className="font-bold text-white text-sm mb-1">{d.name}</div>
-                                    <div className="text-slate-300">Margin at Cap: <span className="font-medium text-white">{d.x}%</span></div>
-                                    <div className="text-slate-300">Utilization: <span className="font-medium text-white">{d.y}%</span></div>
-                                    <div className="text-slate-400 mt-0.5">Capacity: {d.z} seats</div>
-                                  </div>
-                                );
-                              }}
-                            />
-                            <Scatter name="Schools" data={triageData}>
-                              {triageData.map((entry, idx) => (
-                                <Cell key={idx} fill={healthColorMap[entry.health] || '#94a3b8'} fillOpacity={0.85} />
-                              ))}
-                            </Scatter>
-                          </ScatterChart>
-                        </ResponsiveContainer>
-                      </div>
-                      <div className="flex gap-4 text-xs text-slate-400 justify-center mt-1">
-                        <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-full bg-green-500" /> Keeper</span>
-                        <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-full bg-amber-500" /> Fill / Fix</span>
-                        <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-full bg-red-500" /> At Risk</span>
-                        <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-full bg-slate-400" /> Pre-Opening</span>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-
-                {/* ===== ROW 3: REVENUE GAP ===== */}
-                <div className="table-card rounded-xl overflow-hidden">
-                  <div className="px-5 py-3 bg-slate-800 text-white flex items-center justify-between">
-                    <div>
-                      <h3 className="font-semibold">{formatCurrency(summary.totalRevenueGap)} Revenue Sitting in Empty Seats</h3>
-                      <p className="text-xs text-slate-300 mt-0.5">Green = current revenue. Light bar = additional revenue at full capacity. Red line = annual facilities cost. Fill past the red line to cover costs.</p>
-                    </div>
-                  </div>
-                  <div className="p-4" style={{ height: Math.max(350, gapData.length * 30 + 60) }}>
-                    <ResponsiveContainer width="100%" height="100%">
-                      <BarChart data={gapData} layout="vertical" margin={{ left: 140, right: 40, top: 5, bottom: 5 }}>
-                        <CartesianGrid strokeDasharray="3 3" stroke="#334155" horizontal={false} />
-                        <XAxis
-                          type="number"
-                          tickFormatter={(v: number) => formatCurrency(v)}
-                          stroke="#94a3b8" fontSize={11}
-                        />
-                        <YAxis
-                          type="category" dataKey="name" width={130}
-                          tick={{ fill: '#cbd5e1', fontSize: 11 }} tickLine={false}
-                        />
-                        <Tooltip
-                          formatter={(v: number, name: string) => [formatCurrency(v), name]}
-                          contentStyle={{ backgroundColor: '#1e293b', border: '1px solid #475569', borderRadius: 8, fontSize: 12 }}
-                          labelStyle={{ color: '#e2e8f0', fontWeight: 600 }}
-                        />
-                        <Legend wrapperStyle={{ fontSize: 12, color: '#94a3b8', paddingTop: 8 }} />
-                        <Bar dataKey="current" name="Current Revenue" stackId="rev" fill="#22c55e" barSize={16} radius={[0, 0, 0, 0]} />
-                        <Bar dataKey="gap" name="Revenue Gap (to Capacity)" stackId="rev" fill="#86efac" barSize={16} radius={[0, 4, 4, 0]} fillOpacity={0.5} />
-                        <Bar dataKey="cost" name="Facilities Cost" fill="#ef4444" barSize={6} radius={[0, 3, 3, 0]} fillOpacity={0.7} />
-                      </BarChart>
-                    </ResponsiveContainer>
                   </div>
                 </div>
 
@@ -858,18 +837,18 @@ const FacilitiesCapexDashboard: React.FC = () => {
                 {/* ===== ROW 5: KEY INSIGHT BANNER ===== */}
                 <div className="bg-slate-800/80 border border-slate-700 rounded-xl p-5">
                   <div className="text-sm text-slate-200 space-y-2">
-                    <div className="font-semibold text-white text-base mb-2">Key Insights</div>
+                    <div className="font-semibold text-white text-base mb-2">The Bottom Line</div>
                     <div className="flex items-start gap-2">
-                      <span className="text-blue-400 font-bold mt-0.5">1.</span>
-                      <span><strong className="text-white">Utilization is the #1 lever.</strong> At {summary.avgUtilization.toFixed(0)}% utilization, fixed costs are spread across too few students. Filling {emptySeats} empty seats adds {formatCurrency(summary.totalRevenueGap)} in revenue without adding facilities cost.</span>
+                      <span className="text-red-400 font-bold mt-0.5">1.</span>
+                      <span><strong className="text-white">Facilities OpEx exceeds the approved model by {formatCurrency(portfolioOverrun)} (+{overrunPct}%).</strong> CapEx buildout is roughly on budget — the overrun is entirely operational. The model underestimated what it actually costs to run these buildings.</span>
                     </div>
                     <div className="flex items-start gap-2">
-                      <span className="text-blue-400 font-bold mt-0.5">2.</span>
-                      <span><strong className="text-white">{sunkPct}% of costs are locked in.</strong> Lease + depreciation can&apos;t be reduced. The controllable portion (facilities operations + student services) is {formatCurrency(summary.totalControllableCosts)} — that&apos;s where to negotiate vendor contracts.</span>
+                      <span className="text-red-400 font-bold mt-0.5">2.</span>
+                      <span><strong className="text-white">Three cost lines account for {top3Pct}% of all facilities spend:</strong> {top3.map(d => d.name).join(', ')}. These are the negotiation targets — vendor contracts, service level adjustments, and scope reduction.</span>
                     </div>
                     <div className="flex items-start gap-2">
-                      <span className="text-blue-400 font-bold mt-0.5">3.</span>
-                      <span><strong className="text-white">Only {schoolsAtTarget}/{summary.totalSchools} schools reach target margin at capacity.</strong> For the rest, even 100% enrollment won&apos;t hit the tier target — these need structural cost review or lease renegotiation at renewal.</span>
+                      <span className="text-red-400 font-bold mt-0.5">3.</span>
+                      <span><strong className="text-white">Only {schoolsAtTarget}/{summary.totalSchools} schools can reach target margin even at 100% capacity.</strong> For the rest, facilities costs are structurally too high for the approved model to work. These need vendor renegotiation, service scope reduction, or model revision.</span>
                     </div>
                   </div>
                 </div>
